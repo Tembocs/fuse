@@ -1,10 +1,11 @@
 """Fuse Stage 0 — CLI entry point.
 
 Usage:
-    python main.py <file.fuse>        Parse and display AST
+    python main.py <file.fuse>        Run a Fuse source file
     python main.py --tokens <file>    Tokenize only
-    python main.py --check <file>     Check without running (Phase 3+)
-    python main.py --repl             Interactive REPL (Phase 4+)
+    python main.py --check <file>     Check without running
+    python main.py --parse <file>     Parse and print AST
+    python main.py --repl             Interactive REPL (future)
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 from lexer import Lexer
 from parser import Parser
 from checker import Checker
+from evaluator import Evaluator
 from errors import FuseError
 
 
@@ -25,7 +27,7 @@ def main():
         print(__doc__.strip())
         sys.exit(1)
 
-    mode = "parse"
+    mode = "run"
     filepath = sys.argv[1]
 
     if sys.argv[1] == "--tokens" and len(sys.argv) > 2:
@@ -34,8 +36,11 @@ def main():
     elif sys.argv[1] == "--check" and len(sys.argv) > 2:
         mode = "check"
         filepath = sys.argv[2]
+    elif sys.argv[1] == "--parse" and len(sys.argv) > 2:
+        mode = "parse"
+        filepath = sys.argv[2]
     elif sys.argv[1] == "--repl":
-        print("REPL not yet implemented (Phase 4).")
+        print("REPL not yet implemented.")
         sys.exit(0)
 
     try:
@@ -46,6 +51,7 @@ def main():
         sys.exit(1)
 
     try:
+        # Lex
         lexer = Lexer(source, filepath)
         tokens = lexer.tokenize()
 
@@ -54,24 +60,31 @@ def main():
                 print(tok)
             return
 
+        # Parse
         parser = Parser(tokens, filepath)
         program = parser.parse()
 
-        if mode in ("check", "parse"):
-            chk = Checker(program, filepath)
-            errors = chk.check()
-            if errors:
-                for e in errors:
-                    print(e, file=sys.stderr)
-                sys.exit(1)
-            if mode == "check":
-                print("No errors.")
-                return
+        if mode == "parse":
+            for decl in program.declarations:
+                print(decl)
+                print()
+            return
 
-        # Default: print AST summary
-        for decl in program.declarations:
-            print(decl)
-            print()
+        # Check
+        chk = Checker(program, filepath)
+        errors = chk.check()
+        if errors:
+            for e in errors:
+                print(e, file=sys.stderr)
+            sys.exit(1)
+
+        if mode == "check":
+            print("No errors.")
+            return
+
+        # Run
+        ev = Evaluator(program, filepath)
+        ev.run()
 
     except FuseError as e:
         print(e, file=sys.stderr)

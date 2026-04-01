@@ -1,11 +1,7 @@
 # Fuse Implementation Plan
 
-> **For AI agents reading this document:** This is the phased implementation
-> plan for the Fuse programming language. Nine phases, no timelines. Each
-> phase has one job. The entry condition, deliverables, and done-when
-> criterion are explicit for every phase. Milestones are marked clearly.
-> The canonical test program throughout is
-> `tests/fuse/milestone/four_functions.fuse`.
+> **For AI agents reading this document:** This is the phased implementation plan for the Fuse programming language. Nine phases, no timelines. Each phase has one job. The entry condition, deliverables, and done-when criterion are explicit for every phase. Milestones are marked clearly.
+> The canonical test program throughout is `tests/fuse/milestone/four_functions.fuse`.
 
 ---
 
@@ -29,21 +25,15 @@
 
 ## Phase 1 — Test Suite
 
-**One job:** Write every `.fuse` test file and its expected output before any
-implementation exists.
+**One job:** Write every `.fuse` test file and its expected output before any implementation exists.
 
 ### Entry condition
 
-Language design is complete. The language guide is written. The repository
-layout is established.
+Language design is complete. The language guide is written. The repository layout is established.
 
 ### Why tests come first
 
-The test files are plain text — they require no tooling, no interpreter, no
-compiler. Writing them now forces every remaining ambiguity in the language
-design to be resolved on paper rather than discovered mid-implementation. The
-lexer cannot be written until you know what it must tokenize. The evaluator
-cannot be written until you know what it must produce. The tests define both.
+The test files are plain text — they require no tooling, no interpreter, no compiler. Writing them now forces every remaining ambiguity in the language design to be resolved on paper rather than discovered mid-implementation. The lexer cannot be written until you know what it must tokenize. The evaluator cannot be written until you know what it must produce. The tests define both.
 
 ### Deliverables
 
@@ -92,9 +82,7 @@ tests/fuse/full/
 
 ### Expected output format
 
-Write the expected output as a comment block at the top of every test file.
-This makes the intent readable without a separate snapshot file, and gives
-AI agents a self-contained description of what the program must do.
+Write the expected output as a comment block at the top of every test file. This makes the intent readable without a separate snapshot file, and gives AI agents a self-contained description of what the program must do.
 
 ```fuse
 // EXPECTED OUTPUT:
@@ -122,9 +110,7 @@ Error test files state the expected error:
 
 ### Done when
 
-Every file listed above exists. Every file has an `// EXPECTED OUTPUT:` or
-`// EXPECTED ERROR:` block. The expected outputs have been manually verified
-by reading the program logic — not by running it.
+Every file listed above exists. Every file has an `// EXPECTED OUTPUT:` or `// EXPECTED ERROR:` block. The expected outputs have been manually verified by reading the program logic — not by running it.
 
 ---
 
@@ -181,8 +167,7 @@ class MoveExpr:          # `move value` at call site
     value: Expr
 ```
 
-**`stage0/src/parser.py`** — Recursive descent parser. Produces an AST from
-the token stream. Covers all Fuse Core constructs:
+**`stage0/src/parser.py`** — Recursive descent parser. Produces an AST from the token stream. Covers all Fuse Core constructs:
 
 - Function declarations, extension functions
 - `val`/`var` bindings with type inference
@@ -202,8 +187,7 @@ No evaluation — parsing only.
 
 ## Phase 3 — Ownership Checker (Stage 0)
 
-**One job:** Enforce the ownership model and reject invalid programs with
-clear error messages before any evaluation occurs.
+**One job:** Enforce the ownership model and reject invalid programs with clear error messages before any evaluation occurs.
 
 ### Entry condition
 
@@ -255,9 +239,7 @@ error: cannot use `conn` after `move`
 
 ### Done when
 
-All `_rejected.fuse` and `_error.fuse` test files produce the expected error.
-All valid Core test files pass the checker without error. Error messages match
-expected snapshots.
+All `_rejected.fuse` and `_error.fuse` test files produce the expected error. All valid Core test files pass the checker without error. Error messages match expected snapshots.
 
 ---
 
@@ -292,8 +274,7 @@ class FuseStruct:
 ```
 
 **`stage0/src/environment.py`** — Scope chain and binding management.
-Tracks which bindings are live, which have been moved, and which are
-`val` vs `var`.
+Tracks which bindings are live, which have been moved, and which are `val` vs `var`.
 
 **`stage0/src/evaluator.py`** — Tree-walking evaluation of every AST node:
 
@@ -315,9 +296,7 @@ python src/main.py --repl            # interactive REPL
 python src/main.py --check <file>    # check without running
 ```
 
-**`stage0/tests/run_tests.py`** — automated test runner. Executes every
-`.fuse` file in `tests/fuse/core/`, compares stdout to the expected output
-comment, reports pass/fail.
+**`stage0/tests/run_tests.py`** — automated test runner. Executes every `.fuse` file in `tests/fuse/core/`, compares stdout to the expected output comment, reports pass/fail.
 
 ### ⭐ Stage 0 milestone
 
@@ -325,13 +304,11 @@ comment, reports pass/fail.
 python src/main.py ../../tests/fuse/milestone/four_functions.fuse
 ```
 
-Output matches `// EXPECTED OUTPUT:` exactly. All tests in `tests/fuse/core/`
-pass. The Python interpreter stays permanently as the reference implementation.
+Output matches `// EXPECTED OUTPUT:` exactly. All tests in `tests/fuse/core/` pass. The Python interpreter stays permanently as the reference implementation.
 
 ### Done when
 
-The Stage 0 milestone is met. All `tests/fuse/core/` tests pass. The test
-runner exits with zero failures.
+The Stage 0 milestone is met. All `tests/fuse/core/` tests pass. The test runner exits with zero failures.
 
 ---
 
@@ -346,14 +323,9 @@ Phase 4 is complete. `four_functions.fuse` runs. The test suite passes.
 
 ### Why this phase exists
 
-Implementing the interpreter exposes things the design could not. Edge cases
-in ownership semantics become visible when you try to evaluate them. Error
-message quality reveals where the language is ambiguous. Missing test cases
-appear when programs fail in unexpected ways.
+Implementing the interpreter exposes things the design could not. Edge cases in ownership semantics become visible when you try to evaluate them. Error message quality reveals where the language is ambiguous. Missing test cases appear when programs fail in unexpected ways.
 
-Stage 1 is a Rust compiler. Rust has a much higher cost of change than Python.
-Every mistake that survives into Stage 1 is significantly more expensive to fix
-than a mistake caught in Stage 0. This phase is the firewall between the two.
+Stage 1 is a Rust compiler. Rust has a much higher cost of change than Python. Every mistake that survives into Stage 1 is significantly more expensive to fix than a mistake caught in Stage 0. This phase is the firewall between the two.
 
 ### Deliverables
 
@@ -366,22 +338,17 @@ a test that pins it down.
 **New ADRs** — any decision made during Phase 4 that was not covered by an
 existing ADR gets its own entry.
 
-**Fuse Core definition frozen** — a written statement in the language guide
-that Fuse Core is stable. This is the contract that Stage 1 implements.
+**Fuse Core definition frozen** — a written statement in the language guide that Fuse Core is stable. This is the contract that Stage 1 implements.
 
 ### Done when
 
-The language guide accurately describes every behaviour of the Stage 0
-interpreter. No known ambiguity remains. The Fuse Core definition is marked
-stable in the guide. Any developer or AI agent reading the guide could
-implement a second correct interpreter independently.
+The language guide accurately describes every behaviour of the Stage 0 interpreter. No known ambiguity remains. The Fuse Core definition is marked stable in the guide. Any developer or AI agent reading the guide could implement a second correct interpreter independently.
 
 ---
 
 ## Phase 6 — Rust Compiler Frontend (Stage 1)
 
-**One job:** Reproduce the lexer, parser, and checker from Stage 0 in Rust,
-with production-grade error messages.
+**One job:** Reproduce the lexer, parser, and checker from Stage 0 in Rust, with production-grade error messages.
 
 ### Entry condition
 
@@ -389,26 +356,18 @@ Phase 5 is complete. Fuse Core is frozen and documented.
 
 ### Why Rust for Stage 1
 
-Rust is the right host for a compiler targeting systems-level code. Its pattern
-matching over enum types maps naturally to AST walking. Its type system catches
-logic errors in the compiler itself. Its performance makes a fast compiler
-possible without effort. The team's familiarity with Rust means the codebase
-is maintainable.
+Rust is the right host for a compiler targeting systems-level code. Its pattern matching over enum types maps naturally to AST walking. Its type system catches logic errors in the compiler itself. Its performance makes a fast compiler possible without effort. The team's familiarity with Rust means the codebase is maintainable.
 
 ### Deliverables
 
 **`stage1/fusec/src/lexer/`** — Rust tokenizer. Same token set as Stage 0.
 Same line/column tracking.
 
-**`stage1/fusec/src/parser/`** — Rust recursive descent parser. Produces the
-same AST structure as Stage 0, defined as Rust enums.
+**`stage1/fusec/src/parser/`** — Rust recursive descent parser. Produces the same AST structure as Stage 0, defined as Rust enums.
 
-**`stage1/fusec/src/ast/`** — AST node definitions. Every construct in Fuse
-Core as a Rust enum or struct.
+**`stage1/fusec/src/ast/`** — AST node definitions. Every construct in Fuse Core as a Rust enum or struct.
 
-**`stage1/fusec/src/hir/`** — High-level intermediate representation. The
-AST is lowered to HIR after parsing. HIR makes type information and ownership
-annotations explicit — the checker operates on HIR, not AST.
+**`stage1/fusec/src/hir/`** — High-level intermediate representation. The AST is lowered to HIR after parsing. HIR makes type information and ownership annotations explicit — the checker operates on HIR, not AST.
 
 **`stage1/fusec/src/checker/`** — All semantic checks in Rust:
 
@@ -423,16 +382,13 @@ annotations explicit — the checker operates on HIR, not AST.
 
 ### Done when
 
-`cargo run --bin fusec -- --check <file.fuse>` accepts all valid Core test
-files and rejects all error test files with messages matching their
-`// EXPECTED ERROR:` blocks. No code generation yet — checking only.
+`cargo run --bin fusec -- --check <file.fuse>` accepts all valid Core test files and rejects all error test files with messages matching their `// EXPECTED ERROR:` blocks. No code generation yet — checking only.
 
 ---
 
 ## Phase 7 — Rust Compiler Backend (Stage 1)
 
-**One job:** Generate native binaries from checked Fuse Core programs using
-Cranelift.
+**One job:** Generate native binaries from checked Fuse Core programs using Cranelift.
 
 ### Entry condition
 
@@ -440,11 +396,7 @@ Phase 6 is complete. The checker accepts and rejects programs correctly.
 
 ### Why Cranelift
 
-Cranelift is a code generation backend — it is designed for exactly this use.
-Its API is simpler than LLVM's. Its compilation speed is faster. Its output
-quality is sufficient for Stage 1. LLVM can be added as an optional backend
-later for maximum optimisation; Cranelift is the right choice to get native
-code working first.
+Cranelift is a code generation backend — it is designed for exactly this use. Its API is simpler than LLVM's. Its compilation speed is faster. Its output quality is sufficient for Stage 1. LLVM can be added as an optional backend later for maximum optimisation; Cranelift is the right choice to get native code working first.
 
 ### Deliverables
 
@@ -458,11 +410,9 @@ code working first.
   HIR lowering
 
 **`stage1/fuse-runtime/src/asap.rs`** — Runtime support for ASAP destruction.
-The compiler inserts calls into this at last-use points. Handles the cases
-where last-use is conditional (inside a `match` arm, early `return`, etc.).
+The compiler inserts calls into this at last-use points. Handles the cases where last-use is conditional (inside a `match` arm, early `return`, etc.).
 
-**`stage1/fusec/src/codegen/layout.rs`** — Value layout and ABI. How Fuse
-structs are laid out in memory. How arguments and return values are passed.
+**`stage1/fusec/src/codegen/layout.rs`** — Value layout and ABI. How Fuse structs are laid out in memory. How arguments and return values are passed.
 
 ### ⭐ Stage 1 Core milestone
 
@@ -471,21 +421,17 @@ cargo run --bin fusec -- ../../tests/fuse/milestone/four_functions.fuse
 ./four_functions
 ```
 
-Output matches expected. The program is a native binary. All `tests/fuse/core/`
-programs compile and produce correct output. The Stage 0 Python interpreter
-and the Stage 1 compiled binary produce identical output for every Core test.
+Output matches expected. The program is a native binary. All `tests/fuse/core/` programs compile and produce correct output. The Stage 0 Python interpreter and the Stage 1 compiled binary produce identical output for every Core test.
 
 ### Done when
 
-The Stage 1 Core milestone is met. Every `tests/fuse/core/` test compiles and
-passes. Output is byte-for-byte identical to Stage 0 snapshots.
+The Stage 1 Core milestone is met. Every `tests/fuse/core/` test compiles and passes. Output is byte-for-byte identical to Stage 0 snapshots.
 
 ---
 
 ## Phase 8 — Fuse Full (Stage 1)
 
-**One job:** Add every feature that distinguishes Fuse Full from Fuse Core:
-the concurrency model, async runtime, SIMD, and the complete standard library.
+**One job:** Add every feature that distinguishes Fuse Full from Fuse Core: the concurrency model, async runtime, SIMD, and the complete standard library.
 
 ### Entry condition
 
@@ -513,14 +459,12 @@ Thread-safe, integrated with the async executor.
 
 `stage1/fuse-runtime/src/shared.rs` — `RwLock`-backed `Shared<T>`.
 Read guards and write guards that call ASAP destructors on drop.
-`stage1/fusec/src/checker/rank.rs` already written in Phase 6 — wire it to
-the runtime in this phase.
+`stage1/fusec/src/checker/rank.rs` already written in Phase 6 — wire it to the runtime in this phase.
 
 **Async runtime:**
 
 `stage1/fuse-runtime/src/async_rt.rs` — lightweight async executor.
-No tokio dependency. Supports `spawn`, `await`, `suspend`. Designed to be
-small and understandable — the goal is correctness, not maximum throughput.
+No tokio dependency. Supports `spawn`, `await`, `suspend`. Designed to be small and understandable — the goal is correctness, not maximum throughput.
 
 **SIMD:**
 
@@ -549,15 +493,11 @@ cargo run --bin fusec -- ../../tests/fuse/milestone/four_functions.fuse
 ./four_functions
 ```
 
-The full version of `four_functions.fuse` — including `spawn`, channels,
-`Shared<T>`, and `async`/`await` — compiles and runs correctly. Every test
-in `tests/fuse/full/` passes. `@rank` violations, spawn capture violations,
-and missing rank annotations all produce correct compile errors.
+The full version of `four_functions.fuse` — including `spawn`, channels, `Shared<T>`, and `async`/`await` — compiles and runs correctly. Every test in `tests/fuse/full/` passes. `@rank` violations, spawn capture violations, and missing rank annotations all produce correct compile errors.
 
 ### Done when
 
-The Stage 1 Full milestone is met. The complete `tests/fuse/` suite passes.
-The compiler is usable for writing real Fuse programs.
+The Stage 1 Full milestone is met. The complete `tests/fuse/` suite passes. The compiler is usable for writing real Fuse programs.
 
 ---
 
@@ -567,16 +507,11 @@ The compiler is usable for writing real Fuse programs.
 
 ### Entry condition
 
-Phase 8 is complete. The Rust compiler handles all of Fuse Full. The language
-is stable enough that writing a compiler in it is practical — every feature
-the compiler needs exists in the language.
+Phase 8 is complete. The Rust compiler handles all of Fuse Full. The language is stable enough that writing a compiler in it is practical — every feature the compiler needs exists in the language.
 
 ### Why self-hosting matters
 
-Self-hosting is not a vanity milestone. It is the proof that the language is
-complete and expressive enough to build real production software. It also means
-every future improvement to Fuse is immediately available to the compiler
-itself. The compiler becomes the largest, most real-world test of the language.
+Self-hosting is not a vanity milestone. It is the proof that the language is complete and expressive enough to build real production software. It also means every future improvement to Fuse is immediately available to the compiler itself. The compiler becomes the largest, most real-world test of the language.
 
 ### Bootstrap sequence
 
@@ -590,9 +525,7 @@ Step 4: Use fusec2-stage2 to compile fusec2              → fusec2-verified
 Step 5: Verify fusec2-stage2 and fusec2-verified are byte-for-byte identical
 ```
 
-Step 5 is the reproducibility check — if the compiler produces the same binary
-when compiled by itself as when compiled by the Rust compiler, the bootstrap
-is correct.
+Step 5 is the reproducibility check — if the compiler produces the same binary when compiled by itself as when compiled by the Rust compiler, the bootstrap is correct.
 
 ### Deliverables
 
@@ -635,14 +568,11 @@ diff <(sha256sum fusec2-stage2) <(sha256sum fusec2-verified)
 # no output — binaries are identical
 ```
 
-The Rust compiler is no longer required to build Fuse. The project is
-self-sufficient.
+The Rust compiler is no longer required to build Fuse. The project is self-sufficient.
 
 ### Done when
 
-The Stage 2 milestone is met. The reproducibility check passes. The Stage 1
-Rust compiler is archived as a bootstrap tool, not retired — it remains the
-fastest way to rebuild from scratch on a new platform.
+The Stage 2 milestone is met. The reproducibility check passes. The Stage 1 Rust compiler is archived as a bootstrap tool, not retired — it remains the fastest way to rebuild from scratch on a new platform.
 
 ---
 
@@ -660,8 +590,7 @@ Phase 8  ──  Fuse Full  ─────────────────�
 Phase 9  ──  Self-hosting  ──────────────────────────  ⭐ Fuse compiles itself
 ```
 
-No phase begins until the previous phase's done-when condition is met.
-No phase has a deadline. Each phase is complete when it is correct.
+No phase begins until the previous phase's done-when condition is met. No phase has a deadline. Each phase is complete when it is correct.
 
 ---
 
@@ -669,10 +598,7 @@ No phase has a deadline. Each phase is complete when it is correct.
 
 **The guide precedes the implementation.**
 
-If a behaviour is not in the language guide, it does not exist yet. If
-implementation reveals that the guide is wrong, fix the guide first, then
-the implementation. The guide is the contract. The tests are the verification.
-The implementation is the proof.
+If a behaviour is not in the language guide, it does not exist yet. If implementation reveals that the guide is wrong, fix the guide first, then the implementation. The guide is the contract. The tests are the verification. The implementation is the proof.
 
 ---
 
@@ -680,8 +606,5 @@ The implementation is the proof.
 
 ---
 
-> **For AI agents:** Phase entry conditions are explicit — check them before
-> beginning any phase. The canonical test program is
-> `tests/fuse/milestone/four_functions.fuse`. Stage boundaries are at
-> phases 4→5 (stabilization) and 8→9 (self-hosting). The guide must be
-> updated before any implementation in any phase.
+> **For AI agents:**
+> Phase entry conditions are explicit — check them before beginning any phase. The canonical test program is `tests/fuse/milestone/four_functions.fuse`. Stage boundaries are at phases 4→5 (stabilization) and 8→9 (self-hosting). The guide must be updated before any implementation in any phase.
