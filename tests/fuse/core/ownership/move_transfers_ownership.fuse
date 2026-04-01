@@ -1,0 +1,25 @@
+// EXPECTED OUTPUT:
+// Consuming: hello
+// [del] Resource released: hello
+
+@value
+struct Resource {
+  val name: String
+
+  fn __del__(owned self) {
+    println(f"[del] Resource released: {self.name}")
+  }
+}
+
+fn consume(owned res: Resource) {
+  // owned: this function takes full ownership — res will be destroyed here
+  println(f"Consuming: {res.name}")
+  // res last use — __del__ fires
+}
+
+@entrypoint
+fn main() {
+  val res = Resource("hello")
+  consume(move res)
+  // move: ownership transferred — compiler forbids any use of res after this line
+}

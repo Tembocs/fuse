@@ -1,0 +1,27 @@
+// EXPECTED OUTPUT:
+// Received: 1
+// Received: 2
+// Received: 3
+
+// A bounded(2) channel allows at most 2 unsent items.
+// The sender blocks on the third send until the receiver drains one.
+// All three values are eventually delivered in order.
+
+@entrypoint
+async fn main() {
+  val (tx, rx) = Chan::<Int>.bounded(2)
+
+  spawn async {
+    tx.send(1)
+    tx.send(2)
+    tx.send(3)      // blocks until receiver drains at least one
+  }
+
+  val a = await rx.recv()?
+  val b = await rx.recv()?
+  val c = await rx.recv()?
+
+  println(f"Received: {a}")
+  println(f"Received: {b}")
+  println(f"Received: {c}")
+}

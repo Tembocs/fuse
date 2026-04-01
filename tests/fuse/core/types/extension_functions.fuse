@@ -1,0 +1,23 @@
+// EXPECTED OUTPUT:
+// HELLO
+// 5 is odd
+
+fn String.shout(ref self) -> String {
+  self.toUpper()
+}
+
+fn Int.isEven(ref self) -> Bool {
+  self % 2 == 0
+}
+
+@entrypoint
+fn main() {
+  println("hello".shout())
+
+  val n = 5
+  if n.isEven() {
+    println(f"{n} is even")
+  } else {
+    println(f"{n} is odd")
+  }
+}

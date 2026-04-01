@@ -1,0 +1,20 @@
+// EXPECTED OUTPUT:
+// Name: Amara
+// Score: 95.5
+// Active: true
+// Items: [1, 2, 3]
+
+// The compiler infers types from initializers — annotations are optional.
+
+@entrypoint
+fn main() {
+  val name   = "Amara"        // inferred String
+  val score  = 95.5           // inferred Float
+  val active = true           // inferred Bool
+  val items  = [1, 2, 3]     // inferred List<Int>
+
+  println(f"Name: {name}")
+  println(f"Score: {score}")
+  println(f"Active: {active}")
+  println(f"Items: {items}")
+}

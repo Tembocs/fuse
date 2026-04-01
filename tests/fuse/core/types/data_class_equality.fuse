@@ -1,0 +1,20 @@
+// EXPECTED OUTPUT:
+// p1 == p2: true
+// p1 == p3: false
+// p1: Point(1, 2)
+
+// data class generates structural equality and readable toString.
+
+@value
+data class Point(val x: Int, val y: Int)
+
+@entrypoint
+fn main() {
+  val p1 = Point(1, 2)
+  val p2 = Point(1, 2)
+  val p3 = Point(3, 4)
+
+  println(f"p1 == p2: {p1 == p2}")    // structural equality — true
+  println(f"p1 == p3: {p1 == p3}")    // different values — false
+  println(f"p1: {p1}")                // readable toString
+}

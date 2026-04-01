@@ -1,0 +1,14 @@
+// EXPECTED OUTPUT:
+// Received: hello from worker
+
+@entrypoint
+async fn main() {
+  val (tx, rx) = Chan::<String>.unbounded()
+
+  spawn async {
+    tx.send("hello from worker")
+  }
+
+  val msg = await rx.recv()?
+  println(f"Received: {msg}")
+}

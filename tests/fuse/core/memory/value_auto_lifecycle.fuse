@@ -1,0 +1,27 @@
+// EXPECTED OUTPUT:
+// Original: Point(1, 2)
+// [del] Point(1, 2)
+// Copy: Point(1, 2)
+// [del] Point(1, 2)
+
+// Verifies that @value generates copy constructor and destructor.
+// Each copy is an independent value with its own lifecycle.
+
+@value
+data class Point(val x: Int, val y: Int) {
+  fn __del__(owned self) {
+    println(f"[del] Point({self.x}, {self.y})")
+  }
+}
+
+@entrypoint
+fn main() {
+  val p1 = Point(1, 2)
+  val p2 = p1               // copy — @value generates __copyinit__
+
+  println(f"Original: {p1}")
+  // p1's last use — destroyed here
+
+  println(f"Copy: {p2}")
+  // p2's last use — destroyed here
+}

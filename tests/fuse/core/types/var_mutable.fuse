@@ -1,0 +1,11 @@
+// EXPECTED OUTPUT:
+// Before: 0
+// After: 42
+
+@entrypoint
+fn main() {
+  var count = 0
+  println(f"Before: {count}")
+  count = 42
+  println(f"After: {count}")
+}

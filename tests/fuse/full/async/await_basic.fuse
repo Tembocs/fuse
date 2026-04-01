@@ -1,0 +1,12 @@
+// EXPECTED OUTPUT:
+// Fetched: 42
+
+async fn fetchValue() -> Int {
+  42
+}
+
+@entrypoint
+async fn main() {
+  val v = await fetchValue()
+  println(f"Fetched: {v}")
+}

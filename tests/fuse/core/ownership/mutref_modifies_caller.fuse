@@ -1,0 +1,17 @@
+// EXPECTED OUTPUT:
+// Before: [1, 2, 3, 4, 5]
+// After: [2, 4]
+
+fn retainEven(mutref list: List<Int>) {
+  // mutref: modifies the caller's list in place — no copy, no ownership transfer
+  list.retainWhere { n => n % 2 == 0 }
+}
+
+@entrypoint
+fn main() {
+  var numbers = [1, 2, 3, 4, 5]
+  println(f"Before: {numbers}")
+  retainEven(mutref numbers)
+  println(f"After: {numbers}")
+  // numbers has been modified — mutref is visible at both declaration and call site
+}

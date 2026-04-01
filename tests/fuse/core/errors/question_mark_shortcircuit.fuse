@@ -1,0 +1,45 @@
+// EXPECTED OUTPUT:
+// Step 1: ok
+// Step 2: ok
+// Pipeline failed: something went wrong
+
+// Verifies that ? short-circuits on Err — step4 is never reached.
+
+enum AppError {
+  Failed(String)
+}
+
+fn step1() -> Result<String, AppError> {
+  println("Step 1: ok")
+  Ok("one")
+}
+
+fn step2() -> Result<String, AppError> {
+  println("Step 2: ok")
+  Ok("two")
+}
+
+fn step3() -> Result<String, AppError> {
+  Err(AppError.Failed("something went wrong"))
+}
+
+fn step4() -> Result<String, AppError> {
+  println("Step 4: ok")    // should never execute
+  Ok("four")
+}
+
+fn pipeline() -> Result<String, AppError> {
+  val a = step1()?
+  val b = step2()?
+  val c = step3()?          // returns Err — short-circuits here
+  val d = step4()?          // never reached
+  Ok(d)
+}
+
+@entrypoint
+fn main() {
+  match pipeline() {
+    Ok(v)                     => println(f"Pipeline succeeded: {v}")
+    Err(AppError.Failed(msg)) => println(f"Pipeline failed: {msg}")
+  }
+}

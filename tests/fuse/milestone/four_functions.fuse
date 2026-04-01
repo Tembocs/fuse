@@ -1,3 +1,167 @@
-// The canonical Fuse program — all key features in one file.
-// This file is the milestone target for Stage 0 and Stage 1.
-// Content will be written in Phase 1 (Test Suite).
+// EXPECTED OUTPUT:
+// Welcome, Dr. Amara.
+// Summary: avg=72.5, peak=95.0, status=Warn(scores are moderate)
+// Flushed 3 ops
+// Shutdown: db://localhost
+// [del] Connection closed: db://localhost
+// Shutdown sequence complete
+
+// =============================================================================
+// The canonical Fuse program — Fuse Core edition (Stage 0 milestone).
+// Four functions. Each demonstrates a distinct slice of the language.
+// When this file runs correctly in the Stage 0 interpreter, Stage 0 is done.
+// =============================================================================
+
+
+// ---------------------------------------------------------------------------
+// Type definitions
+// ---------------------------------------------------------------------------
+
+enum AppError {
+  NotFound(Int)
+  Empty
+}
+
+enum Status {
+  Ok
+  Warn(String)
+  Err(String)
+}
+
+@value
+data class Metric(val name: String, val value: Float)
+
+@value
+data class Summary(val avg: Float, val peak: Float, val status: Status)
+
+@value
+data class Profile(val displayName: String)
+
+@value
+struct User {
+  val id       : Int
+  val username : String
+  val profile  : Option<Profile>
+  val role     : Option<String>
+}
+
+@value
+struct Connection {
+  val dsn     : String
+  var pending : Int
+
+  fn __del__(owned self) {
+    println(f"[del] Connection closed: {self.dsn}")
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Function 1: fetch a user
+// Demonstrates: ref, Result<T,E>, match, ?, struct construction
+// ---------------------------------------------------------------------------
+
+fn fetchUser(ref id: Int) -> Result<User, AppError> {
+  if id <= 0 { return Err(AppError.NotFound(id)) }
+
+  Ok(User(
+    id,
+    "amara",
+    Some(Profile("Amara")),
+    Some("Dr.")
+  ))
+}
+
+
+// ---------------------------------------------------------------------------
+// Function 2: process a list of metrics
+// Demonstrates: mutref, method chains, when expression, data class
+// ---------------------------------------------------------------------------
+
+fn processMetrics(mutref data: List<Metric>) -> Result<Summary, AppError> {
+  data.retainWhere { m => m.value > 0.0 and m.value < 1000.0 }
+
+  if data.isEmpty() { return Err(AppError.Empty) }
+
+  val values = data.map { m => m.value }
+  val avg    = values.sum() / values.len().toFloat()
+  val peak   = values.sorted().last()
+
+  val status = when {
+    avg <  50.0  => Status.Ok
+    avg < 200.0  => Status.Warn("scores are moderate")
+    else         => Status.Err("critical threshold")
+  }
+
+  Ok(Summary(avg, peak, status))
+}
+
+
+// ---------------------------------------------------------------------------
+// Function 3: greet a user
+// Demonstrates: extension fn, ref self, optional chaining, Elvis, f-string, match
+// ---------------------------------------------------------------------------
+
+fn User.greetUser(ref self) -> String {
+  val name  = self.profile?.displayName ?: self.username
+  val title = self.role
+
+  match title {
+    Some(t) => f"Welcome, {t} {name}."
+    None    => f"Welcome, {name}."
+  }
+}
+
+
+// ---------------------------------------------------------------------------
+// Function 4: shut down a connection
+// Demonstrates: owned, move (call site), defer, __del__ (ASAP destruction)
+// ---------------------------------------------------------------------------
+
+fn shutdown(owned conn: Connection) {
+  defer println("Shutdown sequence complete")
+
+  if conn.pending > 0 {
+    println(f"Flushed {conn.pending} ops")
+  }
+
+  println(f"Shutdown: {conn.dsn}")
+  // conn's last use — __del__ fires here, then defer fires at scope exit
+}
+
+
+// ---------------------------------------------------------------------------
+// Entry point
+// ---------------------------------------------------------------------------
+
+@entrypoint
+fn main() -> Result<(), AppError> {
+  // Function 1: fetch a user
+  val user = fetchUser(42)?
+
+  // Function 3: greet the user
+  println(user.greetUser())
+
+  // Function 2: process metrics (mutref modifies the list in place)
+  var metrics = [
+    Metric("cpu",  45.0),
+    Metric("mem",  85.0),
+    Metric("disk", 65.0),
+    Metric("err",  -1.0),
+    Metric("net",  95.0)
+  ]
+
+  val summary = processMetrics(mutref metrics)?
+
+  match summary.status {
+    Status.Ok      => println(f"Summary: avg={summary.avg}, peak={summary.peak}, status=Ok")
+    Status.Warn(w) => println(f"Summary: avg={summary.avg}, peak={summary.peak}, status=Warn({w})")
+    Status.Err(e)  => println(f"Summary: avg={summary.avg}, peak={summary.peak}, status=Err({e})")
+  }
+
+  // Function 4: shut down (move transfers ownership)
+  val conn = Connection("db://localhost", 3)
+  shutdown(move conn)
+
+  Ok(())
+}

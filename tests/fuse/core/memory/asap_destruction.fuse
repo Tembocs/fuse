@@ -1,0 +1,36 @@
+// EXPECTED OUTPUT:
+// Created A
+// Created B
+// Using A
+// [del] Destroyed: A
+// Using B
+// [del] Destroyed: B
+// Done
+
+// Verifies that values are destroyed at their last use, not at scope end.
+// If destruction happened at scope end, both [del] messages would appear after "Done".
+
+@value
+struct Tracker {
+  val name: String
+
+  fn __del__(owned self) {
+    println(f"[del] Destroyed: {self.name}")
+  }
+}
+
+@entrypoint
+fn main() {
+  val a = Tracker("A")
+  println("Created A")
+  val b = Tracker("B")
+  println("Created B")
+
+  println(f"Using {a.name}")
+  // a's last use — destroyed here
+
+  println(f"Using {b.name}")
+  // b's last use — destroyed here
+
+  println("Done")
+}

@@ -1,0 +1,32 @@
+// EXPECTED OUTPUT:
+// Name: Amara
+// Name: stranger
+// Lang: en
+// Lang: default
+
+@value
+data class Locale(val language: String)
+
+@value
+data class Profile(val displayName: String, val locale: Option<Locale>)
+
+fn getName(ref profile: Option<Profile>) -> String {
+  // ?. chains through Option — short-circuits to None if any link is None
+  // ?: Elvis operator — unwrap or use fallback
+  profile?.displayName ?: "stranger"
+}
+
+fn getLang(ref profile: Option<Profile>) -> String {
+  profile?.locale?.language ?: "default"
+}
+
+@entrypoint
+fn main() {
+  val full: Option<Profile> = Some(Profile("Amara", Some(Locale("en"))))
+  val empty: Option<Profile> = None
+
+  println(f"Name: {getName(ref full)}")
+  println(f"Name: {getName(ref empty)}")
+  println(f"Lang: {getLang(ref full)}")
+  println(f"Lang: {getLang(ref empty)}")
+}

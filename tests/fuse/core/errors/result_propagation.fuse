@@ -1,0 +1,30 @@
+// EXPECTED OUTPUT:
+// Result: 5
+// Error: division by zero
+
+enum MathError {
+  DivisionByZero
+}
+
+fn divide(ref a: Int, ref b: Int) -> Result<Int, MathError> {
+  if b == 0 { return Err(MathError.DivisionByZero) }
+  Ok(a / b)
+}
+
+fn compute(ref x: Int, ref y: Int) -> Result<Int, MathError> {
+  val result = divide(x, y)?     // ? propagates Err upward
+  Ok(result + 1)
+}
+
+@entrypoint
+fn main() {
+  match compute(8, 2) {
+    Ok(v)                          => println(f"Result: {v}")
+    Err(MathError.DivisionByZero)  => println("Error: division by zero")
+  }
+
+  match compute(8, 0) {
+    Ok(v)                          => println(f"Result: {v}")
+    Err(MathError.DivisionByZero)  => println("Error: division by zero")
+  }
+}

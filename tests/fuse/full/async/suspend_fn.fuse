@@ -1,0 +1,17 @@
+// EXPECTED OUTPUT:
+// Loading...
+// Loaded: data
+
+// suspend marks a function as a suspension point —
+// the caller must be async-aware.
+
+suspend async fn loadData() -> String {
+  "data"
+}
+
+@entrypoint
+async fn main() {
+  println("Loading...")
+  val d = await loadData()
+  println(f"Loaded: {d}")
+}

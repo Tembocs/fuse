@@ -1,0 +1,18 @@
+// EXPECTED ERROR:
+// error: match is not exhaustive
+//        missing case: `Error(Int)`
+//   --> match_missing_arm.fuse:14:3
+
+enum FetchResult {
+  Found(String)
+  NotFound
+  Error(Int)
+}
+
+fn describe(ref result: FetchResult) -> String {
+  match result {
+    FetchResult.Found(name) => f"Found: {name}"
+    FetchResult.NotFound    => "Not found"
+    // missing: FetchResult.Error — compile error
+  }
+}

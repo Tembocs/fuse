@@ -1,0 +1,26 @@
+// EXPECTED OUTPUT:
+// Found: apple
+// Not found
+// Server error: 500
+
+enum FetchResult {
+  Found(String)
+  NotFound
+  Error(Int)
+}
+
+fn describe(ref result: FetchResult) -> String {
+  // match is exhaustive — the compiler rejects missing arms
+  match result {
+    FetchResult.Found(name) => f"Found: {name}"
+    FetchResult.NotFound    => "Not found"
+    FetchResult.Error(code) => f"Server error: {code}"
+  }
+}
+
+@entrypoint
+fn main() {
+  println(describe(ref FetchResult.Found("apple")))
+  println(describe(ref FetchResult.NotFound))
+  println(describe(ref FetchResult.Error(500)))
+}

@@ -1,0 +1,13 @@
+// EXPECTED OUTPUT:
+// Sum: 10.0
+// Avg: 2.5
+
+@entrypoint
+fn main() {
+  val values = [1.0, 2.0, 3.0, 4.0]
+  val sum = SIMD<Float32, 4>.sum(values)
+  val avg = sum / values.len().toFloat()
+
+  println(f"Sum: {sum}")
+  println(f"Avg: {avg}")
+}

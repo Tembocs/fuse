@@ -1,0 +1,19 @@
+// EXPECTED OUTPUT:
+// Name: Amara
+// Score: 95
+
+@value
+data class User(val name: String, val score: Int)
+
+fn printUser(ref user: User) {
+  // ref: read-only view — cannot modify user, cannot move it
+  println(f"Name: {user.name}")
+  println(f"Score: {user.score}")
+}
+
+@entrypoint
+fn main() {
+  val user = User("Amara", 95)
+  printUser(ref user)
+  // user is still valid here — ref does not consume it
+}

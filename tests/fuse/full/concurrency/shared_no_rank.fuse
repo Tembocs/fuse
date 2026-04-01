@@ -1,0 +1,10 @@
+// EXPECTED ERROR:
+// error: Shared<T> requires @rank(N) annotation
+//        deadlock safety cannot be guaranteed without it
+//        hint: add @rank(1) if this is your only shared resource
+//   --> shared_no_rank.fuse:7:15
+
+@entrypoint
+fn main() {
+  val data = Shared::new(0)    // error: missing @rank
+}

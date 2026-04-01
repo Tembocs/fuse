@@ -1,0 +1,18 @@
+// EXPECTED ERROR:
+// error: cannot use `res` after `move`
+//        ownership was transferred on line 13
+//   --> move_prevents_reuse.fuse:14:11
+
+@value
+struct Resource {
+  val name: String
+}
+
+fn consume(owned res: Resource) { }
+
+@entrypoint
+fn main() {
+  val res = Resource("hello")
+  consume(move res)
+  println(res.name)     // error: use after move
+}

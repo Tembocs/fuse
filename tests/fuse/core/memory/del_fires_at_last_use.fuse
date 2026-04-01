@@ -1,0 +1,28 @@
+// EXPECTED OUTPUT:
+// Step 1
+// Using handle: resource
+// [del] Released: resource
+// Step 2
+// Done
+
+// Verifies that __del__ fires at the exact last-use point.
+// The [del] message appears between "Using handle" and "Step 2",
+// proving destruction is not deferred to scope end.
+
+@value
+struct Handle {
+  val tag: String
+
+  fn __del__(owned self) {
+    println(f"[del] Released: {self.tag}")
+  }
+}
+
+@entrypoint
+fn main() {
+  val h = Handle("resource")
+  println("Step 1")
+  println(f"Using handle: {h.tag}")   // h's last use — __del__ fires here
+  println("Step 2")
+  println("Done")
+}

@@ -1,0 +1,12 @@
+// EXPECTED ERROR:
+// error: cannot acquire @rank(2) while holding @rank(3)
+//        acquire `db` before `metrics`, or release `metrics` first
+//   --> shared_rank_violation.fuse:10:20
+
+@rank(2) val db      = Shared::new(0)
+@rank(3) val metrics = Shared::new(0)
+
+fn broken() {
+  val mutref m    = metrics.write()    // rank 3 acquired
+  val mutref conn = db.write()         // rank 2 < 3 — compile error
+}

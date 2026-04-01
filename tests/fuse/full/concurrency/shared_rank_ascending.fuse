@@ -1,0 +1,24 @@
+// EXPECTED OUTPUT:
+// Config: debug
+// Counter: 1
+
+// Demonstrates Shared<T> with @rank acquired in ascending order — no deadlock.
+
+@value
+data class Config(val mode: String)
+
+@rank(1) val config  = Shared::new(Config("debug"))
+@rank(2) val counter = Shared::new(0)
+
+fn update() {
+  val ref    cfg = config.read()      // rank 1 acquired
+  val mutref cnt = counter.write()    // rank 2 > 1 — valid
+  cnt = cnt + 1
+  println(f"Config: {cfg.mode}")
+  println(f"Counter: {cnt}")
+}
+
+@entrypoint
+fn main() {
+  update()
+}

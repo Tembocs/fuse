@@ -1,0 +1,10 @@
+// EXPECTED ERROR:
+// error: cannot reassign to `name` — declared as `val`
+//        use `var` if reassignment is intended
+//   --> val_immutable.fuse:7:3
+
+@entrypoint
+fn main() {
+  val name = "Amara"
+  name = "Bayo"           // error: val is immutable
+}
