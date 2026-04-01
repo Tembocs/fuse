@@ -1,0 +1,2 @@
+# Fuse Stage 0 — Python interpreter
+# No third-party dependencies. stdlib only.

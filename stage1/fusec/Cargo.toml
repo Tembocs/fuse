@@ -1,0 +1,12 @@
+[package]
+name = "fusec"
+version = "0.1.0"
+edition = "2021"
+description = "The Fuse compiler — Stage 1"
+
+[[bin]]
+name = "fusec"
+path = "src/main.rs"
+
+[dependencies]
+# Cranelift and other dependencies added in Phase 6+

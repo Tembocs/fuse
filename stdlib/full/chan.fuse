@@ -1,0 +1,3 @@
+// Chan<T> — typed channels for Tier 1 concurrency.
+// Bounded and unbounded. send, recv, recvBatch.
+// Placeholder — implemented in Phase 8 (Fuse Full).

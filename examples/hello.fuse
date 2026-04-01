@@ -1,0 +1,6 @@
+// hello.fuse — simplest possible Fuse program.
+
+@entrypoint
+fn main() {
+  println("Hello, Fuse!")
+}

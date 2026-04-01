@@ -1,0 +1,8 @@
+[package]
+name = "fuse-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Fuse runtime support library"
+
+[dependencies]
+# Dependencies added in Phase 7+

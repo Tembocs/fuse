@@ -1,0 +1,3 @@
+// Shared<T> — shared mutable state with @rank for Tier 2 concurrency.
+// read, write, try_write.
+// Placeholder — implemented in Phase 8 (Fuse Full).

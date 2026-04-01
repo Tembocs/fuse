@@ -1,0 +1,3 @@
+// Option<T> — the standard type for nullable values.
+// Some(value) when present, None when absent.
+// Placeholder — full implementation in Phase 2+.

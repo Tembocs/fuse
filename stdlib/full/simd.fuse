@@ -1,0 +1,3 @@
+// SIMD<T, N> — single instruction, multiple data primitives.
+// sum, dot, broadcast.
+// Placeholder — implemented in Phase 8 (Fuse Full).
