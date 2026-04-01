@@ -1,1 +1,1 @@
-// Fuse Stage 1 — Value layout and ABI.
+// Value layout and ABI — Phase 7.

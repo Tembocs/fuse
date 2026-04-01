@@ -1,2 +1,2 @@
-// Fuse Stage 1 — Parser module.
-pub mod parser;
+mod parser;
+pub use self::parser::Parser;

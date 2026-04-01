@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python main.py --tokens ../../tests/fuse/core/types/var_mutable.fuse)",
+      "Bash(python main.py ../../tests/fuse/core/types/var_mutable.fuse)",
+      "Bash(python main.py ../../tests/fuse/core/memory/asap_destruction.fuse)",
+      "Bash(python main.py ../../tests/fuse/core/types/extension_functions.fuse)",
+      "Bash(python main.py ../../tests/fuse/milestone/four_functions.fuse)",
+      "Bash(python main.py ../../tests/fuse/core/types/type_inference.fuse)",
+      "Bash(python tests/run_tests.py)",
+      "Read(//tmp/**)",
+      "Bash(sed -n '86,102p' /d/rust/fuse/docs/guide/fuse-language-guide.md)",
+      "Bash(sed -n '763,773p' /d/rust/fuse/docs/guide/fuse-language-guide.md)"
+    ]
+  }
+}

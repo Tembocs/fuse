@@ -1,1 +1,1 @@
-// Fuse Stage 1 — AST to HIR lowering.
+// AST to HIR lowering — Phase 7.

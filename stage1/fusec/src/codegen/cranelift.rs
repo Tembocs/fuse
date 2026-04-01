@@ -1,1 +1,1 @@
-// Fuse Stage 1 — HIR to Cranelift IR translation.
+// HIR to Cranelift IR translation — Phase 7.

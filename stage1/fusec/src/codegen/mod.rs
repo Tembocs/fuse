@@ -1,3 +1,3 @@
-// Fuse Stage 1 — Code generation module.
+// Code generation module — Phase 7.
 pub mod cranelift;
 pub mod layout;

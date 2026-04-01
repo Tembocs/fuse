@@ -1,1 +1,1 @@
-// Fuse Stage 1 — HIR node definitions.
+// HIR node definitions — Phase 7.

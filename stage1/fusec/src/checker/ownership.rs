@@ -1,1 +1,2 @@
-// Fuse Stage 1 — ref/mutref/owned/move enforcement.
+// ref/mutref/owned/move enforcement.
+// Core logic is in checker/mod.rs for Phase 6.
