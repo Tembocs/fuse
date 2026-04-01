@@ -1,8 +1,8 @@
 // EXPECTED WARNING:
 // warning: write guard held across await point
-//          another task waiting on `db.write()` will be blocked
-//          for the entire await duration
-//   --> write_guard_across_await.fuse:9:16
+//        another task waiting on `db.write()` will be blocked
+//        for the entire await duration
+//   --> write_guard_across_await.fuse:13:16
 
 @rank(1) val db = Shared::new(0)
 

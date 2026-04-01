@@ -1,7 +1,7 @@
 // EXPECTED ERROR:
 // error: `mutref` capture is not permitted across spawn boundary
 //        use `Shared<T>` for shared mutable state across tasks
-//   --> spawn_mutref_rejected.fuse:8:5
+//   --> spawn_mutref_rejected.fuse:9:3
 
 @entrypoint
 fn main() {

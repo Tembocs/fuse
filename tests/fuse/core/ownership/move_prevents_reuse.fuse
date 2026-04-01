@@ -1,7 +1,7 @@
 // EXPECTED ERROR:
 // error: cannot use `res` after `move`
-//        ownership was transferred on line 13
-//   --> move_prevents_reuse.fuse:14:11
+//        ownership was transferred on line 16
+//   --> move_prevents_reuse.fuse:17:11
 
 @value
 struct Resource {

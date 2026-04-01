@@ -7,22 +7,34 @@ pub struct FuseError {
     pub file: String,
     pub line: usize,
     pub col: usize,
+    pub kind: ErrorKind,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ErrorKind { Error, Warning }
 
 impl FuseError {
     pub fn new(message: impl Into<String>, file: impl Into<String>, line: usize, col: usize) -> Self {
-        Self { message: message.into(), hint: None, file: file.into(), line, col }
+        Self { message: message.into(), hint: None, file: file.into(), line, col, kind: ErrorKind::Error }
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
     }
+
+    pub fn warning(message: impl Into<String>, file: impl Into<String>, line: usize, col: usize) -> Self {
+        Self { message: message.into(), hint: None, file: file.into(), line, col, kind: ErrorKind::Warning }
+    }
 }
 
 impl fmt::Display for FuseError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "error: {}", self.message)?;
+        let prefix = match self.kind {
+            ErrorKind::Error => "error",
+            ErrorKind::Warning => "warning",
+        };
+        write!(f, "{prefix}: {}", self.message)?;
         if let Some(hint) = &self.hint {
             write!(f, "\n       {hint}")?;
         }

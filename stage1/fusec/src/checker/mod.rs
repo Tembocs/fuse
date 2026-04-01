@@ -8,6 +8,7 @@ pub mod async_lint;
 use std::collections::{HashMap, HashSet};
 use crate::error::FuseError;
 use crate::ast::nodes::*;
+use crate::parser::expr_span;
 
 // ═══════════════════════════════════════════════════════════════════════
 // Binding info for scope tracking
@@ -28,6 +29,14 @@ pub struct Checker {
     errors: Vec<FuseError>,
     enums: HashMap<String, EnumDecl>,
     scopes: Vec<HashMap<String, Binding>>,
+    in_spawn: bool,
+    in_async: bool,
+    // Track @rank annotations: name -> rank value
+    ranks: HashMap<String, i64>,
+    // Track currently held ranks (acquired Shared locks in scope)
+    held_ranks: Vec<(String, i64)>,
+    // Track write guards held: name -> true
+    write_guards: HashSet<String>,
 }
 
 impl Checker {
@@ -37,6 +46,11 @@ impl Checker {
             errors: Vec::new(),
             enums: HashMap::new(),
             scopes: Vec::new(),
+            in_spawn: false,
+            in_async: false,
+            ranks: HashMap::new(),
+            held_ranks: Vec::new(),
+            write_guards: HashSet::new(),
         };
         c.register_builtins();
         c.collect_enums(program);
@@ -44,6 +58,11 @@ impl Checker {
     }
 
     pub fn check(mut self, program: &Program) -> Vec<FuseError> {
+        // First pass: collect @rank annotations on TopVal/TopVar
+        for decl in &program.decls {
+            self.collect_ranks(decl);
+        }
+        // Second pass: check everything
         for decl in &program.decls {
             self.check_decl(decl);
         }
@@ -105,17 +124,70 @@ impl Checker {
         self.errors.push(e);
     }
 
+    // ── @rank collection ─────────────────────────────────────────────
+    fn collect_ranks(&mut self, decl: &Decl) {
+        match decl {
+            Decl::TopVal { name, annotations, .. } | Decl::TopVar { name, annotations, .. } => {
+                for ann in annotations {
+                    if ann.name == "rank" {
+                        if let Some(Expr::IntLit(v, _)) = ann.args.first() {
+                            self.ranks.insert(name.clone(), *v);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
     // ── declaration checking ─────────────────────────────────────────
     fn check_decl(&mut self, decl: &Decl) {
         match decl {
             Decl::Fn(f) => self.check_fn(f),
             Decl::Struct(s) => { for m in &s.methods { self.check_fn(m); } }
             Decl::DataClass(d) => { for m in &d.methods { self.check_fn(m); } }
+            Decl::TopVal { name, value, annotations, span, .. } => {
+                self.check_shared_requires_rank(name, value, annotations, span);
+            }
+            Decl::TopVar { name, value, annotations, span, .. } => {
+                self.check_shared_requires_rank(name, value, annotations, span);
+            }
             _ => {}
         }
     }
 
+    /// Check that Shared::new() calls have @rank annotations
+    fn check_shared_requires_rank(&mut self, _name: &str, value: &Expr, annotations: &[Annotation], _span: &Span) {
+        if self.is_shared_new(value) {
+            let has_rank = annotations.iter().any(|a| a.name == "rank");
+            if !has_rank {
+                let val_span = expr_span(value);
+                self.report(
+                    "Shared<T> requires @rank(N) annotation",
+                    &val_span,
+                    Some("deadlock safety cannot be guaranteed without it\n       hint: add @rank(1) if this is your only shared resource".into()),
+                );
+            }
+        }
+    }
+
+    fn is_shared_new(&self, expr: &Expr) -> bool {
+        match expr {
+            Expr::Call(callee, _, _) => {
+                if let Expr::Path(obj, method, _) = callee.as_ref() {
+                    if let Expr::Ident(name, _) = obj.as_ref() {
+                        return name == "Shared" && method == "new";
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     fn check_fn(&mut self, f: &FnDecl) {
+        let prev_async = self.in_async;
+        self.in_async = f.is_async;
         self.push_scope();
         for p in &f.params {
             self.define(&p.name, Binding {
@@ -130,6 +202,7 @@ impl Checker {
             FnBody::Expr(e) => self.check_expr(e),
         }
         self.pop_scope();
+        self.in_async = prev_async;
     }
 
     // ── statement checking ───────────────────────────────────────────
@@ -139,9 +212,46 @@ impl Checker {
 
     fn check_stmt(&mut self, stmt: &Stmt) {
         match stmt {
-            Stmt::Val { name, value, .. } => {
+            Stmt::Val { name, convention, value, span, .. } => {
                 self.check_expr(value);
-                self.define(name, Binding { is_mutable: false, convention: None, moved: false, moved_line: 0 });
+                let is_mut = convention.as_deref() == Some("mutref");
+                // Check for local Shared::new without @rank
+                if self.is_shared_new(value) && !self.ranks.contains_key(name) {
+                    let val_span = expr_span(value);
+                    self.report(
+                        "Shared<T> requires @rank(N) annotation",
+                        &val_span,
+                        Some("deadlock safety cannot be guaranteed without it\n       hint: add @rank(1) if this is your only shared resource".into()),
+                    );
+                }
+                // Track write guards and check rank ordering
+                if let Some(conv) = convention {
+                    if let Some(shared_name) = self.extract_shared_call(value) {
+                        if let Some(&rank) = self.ranks.get(&shared_name) {
+                            // Check rank ordering
+                            if let Some(&(ref held_name, held_rank)) = self.held_ranks.last() {
+                                if rank < held_rank {
+                                    self.report(
+                                        format!("cannot acquire @rank({rank}) while holding @rank({held_rank})"),
+                                        span,
+                                        Some(format!("acquire `{shared_name}` before `{held_name}`, or release `{held_name}` first")),
+                                    );
+                                }
+                            }
+                            self.held_ranks.push((shared_name.clone(), rank));
+                        }
+                        if conv == "mutref" {
+                            self.write_guards.insert(format!("{shared_name}"));
+                        }
+                    }
+                }
+                self.define(name, Binding { is_mutable: is_mut, convention: convention.clone(), moved: false, moved_line: 0 });
+            }
+            Stmt::ValTuple { names, value, .. } => {
+                self.check_expr(value);
+                for name in names {
+                    self.define(name, Binding { is_mutable: false, convention: None, moved: false, moved_line: 0 });
+                }
             }
             Stmt::Var { name, value, .. } => {
                 self.check_expr(value);
@@ -210,6 +320,31 @@ impl Checker {
             Expr::Call(callee, args, _) => { self.check_expr(callee); for a in args { self.check_expr(a); } }
             Expr::Field(o, _, _) | Expr::OptChain(o, _, _) => self.check_expr(o),
             Expr::Question(e, _) | Expr::RefE(e, _) | Expr::MutrefE(e, _) => self.check_expr(e),
+            Expr::Await(e, span) => {
+                // Check for write guard held across await
+                if !self.write_guards.is_empty() {
+                    let guards: Vec<_> = self.write_guards.iter().cloned().collect();
+                    for guard_name in &guards {
+                        self.report_warning(
+                            "write guard held across await point",
+                            span,
+                            Some(format!("another task waiting on `{guard_name}.write()` will be blocked\n       for the entire await duration")),
+                        );
+                    }
+                }
+                self.check_expr(e);
+            }
+            Expr::Spawn(e, _, span) => {
+                let prev = self.in_spawn;
+                self.in_spawn = true;
+                // Collect outer var names before entering spawn scope
+                let outer_vars: Vec<String> = self.scopes.iter().flat_map(|s| {
+                    s.iter().filter(|(_, b)| b.is_mutable).map(|(n, _)| n.clone())
+                }).collect();
+                self.check_spawn_body(e, &outer_vars, span);
+                self.in_spawn = prev;
+            }
+            Expr::Path(e, _, _) => self.check_expr(e),
             Expr::Elvis(l, r, _) => { self.check_expr(l); self.check_expr(r); }
             Expr::Match(subject, arms, span) => {
                 self.check_expr(subject);
@@ -247,6 +382,76 @@ impl Checker {
                 );
             }
         }
+    }
+
+    // ── spawn capture checking ───────────────────────────────────────
+    fn check_spawn_body(&mut self, expr: &Expr, outer_vars: &[String], spawn_span: &Span) {
+        match expr {
+            Expr::Block(stmts, _) => {
+                // Check all statements in the spawn block for mutref captures
+                for stmt in stmts {
+                    self.check_spawn_stmt(stmt, outer_vars, spawn_span);
+                }
+            }
+            _ => self.check_expr(expr),
+        }
+    }
+
+    fn check_spawn_stmt(&mut self, stmt: &Stmt, outer_vars: &[String], spawn_span: &Span) {
+        match stmt {
+            Stmt::Assign { target, value, .. } => {
+                if let Expr::Ident(name, _) = target {
+                    if outer_vars.contains(name) {
+                        self.report(
+                            "`mutref` capture is not permitted across spawn boundary",
+                            spawn_span,
+                            Some("use `Shared<T>` for shared mutable state across tasks".into()),
+                        );
+                        return;
+                    }
+                }
+                self.check_expr(value);
+            }
+            Stmt::Expr(e) => {
+                self.check_spawn_expr(e, outer_vars, spawn_span);
+            }
+            _ => {}
+        }
+    }
+
+    fn check_spawn_expr(&mut self, expr: &Expr, outer_vars: &[String], spawn_span: &Span) {
+        match expr {
+            Expr::Ident(name, _) => {
+                if outer_vars.contains(name) {
+                    // Reading a mutable var from outer scope is also a capture
+                }
+            }
+            Expr::Call(callee, args, _) => {
+                self.check_spawn_expr(callee, outer_vars, spawn_span);
+                for a in args { self.check_spawn_expr(a, outer_vars, spawn_span); }
+            }
+            _ => self.check_expr(expr),
+        }
+    }
+
+    /// Extract the shared variable name from expr.read() or expr.write()
+    fn extract_shared_call(&self, value: &Expr) -> Option<String> {
+        if let Expr::Call(callee, _, _) = value {
+            if let Expr::Field(obj, method, _) = callee.as_ref() {
+                if method == "read" || method == "write" {
+                    if let Expr::Ident(name, _) = obj.as_ref() {
+                        return Some(name.clone());
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn report_warning(&mut self, msg: impl Into<String>, span: &Span, hint: Option<String>) {
+        let mut e = FuseError::warning(msg, &self.file, span.line, span.col);
+        e.hint = hint;
+        self.errors.push(e);
     }
 
     // ── match exhaustiveness ─────────────────────────────────────────

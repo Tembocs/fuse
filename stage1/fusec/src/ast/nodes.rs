@@ -49,6 +49,9 @@ pub enum Expr {
     MutrefE(Box<Expr>, Span),
     RefE(Box<Expr>, Span),
     Block(Vec<Stmt>, Span),
+    Spawn(Box<Expr>, bool, Span),     // expr, is_async, span
+    Await(Box<Expr>, Span),
+    Path(Box<Expr>, String, Span),    // Shared::new => Path(Ident("Shared"), "new")
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -70,7 +73,8 @@ pub struct WhenArm { pub cond: Option<Expr>, pub body: Expr, pub span: Span }
 // ── Statements ───────────────────────────────────────────────────────
 #[derive(Debug, Clone)]
 pub enum Stmt {
-    Val { name: String, ty: Option<TypeExpr>, value: Expr, span: Span },
+    Val { name: String, convention: Option<String>, ty: Option<TypeExpr>, value: Expr, span: Span },
+    ValTuple { names: Vec<String>, value: Expr, span: Span },
     Var { name: String, ty: Option<TypeExpr>, value: Expr, span: Span },
     Assign { target: Expr, value: Expr, span: Span },
     Expr(Expr),
@@ -112,6 +116,8 @@ pub struct FnDecl {
     pub ret_ty: Option<TypeExpr>,
     pub body: FnBody,
     pub annotations: Vec<Annotation>,
+    pub is_async: bool,
+    pub is_suspend: bool,
     pub span: Span,
 }
 
@@ -153,8 +159,8 @@ pub enum Decl {
     Enum(EnumDecl),
     Struct(StructDecl),
     DataClass(DataClassDecl),
-    TopVal { name: String, ty: Option<TypeExpr>, value: Expr, span: Span },
-    TopVar { name: String, ty: Option<TypeExpr>, value: Expr, span: Span },
+    TopVal { name: String, ty: Option<TypeExpr>, value: Expr, annotations: Vec<Annotation>, span: Span },
+    TopVar { name: String, ty: Option<TypeExpr>, value: Expr, annotations: Vec<Annotation>, span: Span },
 }
 
 #[derive(Debug, Clone)]

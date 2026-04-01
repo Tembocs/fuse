@@ -30,31 +30,44 @@ fn main() {
         Err(e) => { eprintln!("error: {e}"); process::exit(1); }
     };
 
-    if let Err(e) = run(mode, &source, filepath) {
-        eprintln!("{e}");
-        process::exit(1);
-    }
+    run(mode, &source, filepath);
 }
 
-fn run(_mode: &str, source: &str, filepath: &str) -> Result<(), FuseError> {
+fn run(_mode: &str, source: &str, filepath: &str) {
+    // Use just the filename for error messages
+    let display_name = std::path::Path::new(filepath)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(filepath);
+
     // Lex
-    let mut lexer = Lexer::new(source, filepath);
-    let tokens = lexer.tokenize()?;
+    let mut lexer = Lexer::new(source, display_name);
+    let tokens = match lexer.tokenize() {
+        Ok(t) => t,
+        Err(e) => { eprintln!("{e}"); process::exit(1); }
+    };
 
     // Parse
-    let mut parser = Parser::new(tokens, filepath);
-    let program = parser.parse()?;
+    let mut parser = Parser::new(tokens, display_name);
+    let program = match parser.parse() {
+        Ok(p) => p,
+        Err(e) => { eprintln!("{e}"); process::exit(1); }
+    };
 
     // Check
-    let checker = Checker::new(&program, filepath);
-    let errors = checker.check(&program);
-    if !errors.is_empty() {
-        for e in &errors {
-            eprintln!("{e}");
-        }
-        return Err(errors.into_iter().next().unwrap());
+    let checker = Checker::new(&program, display_name);
+    let diagnostics = checker.check(&program);
+
+    // Print all diagnostics
+    for d in &diagnostics {
+        eprintln!("{d}");
+    }
+
+    // Only true errors cause failure (not warnings)
+    let has_errors = diagnostics.iter().any(|e| e.kind == error::ErrorKind::Error);
+    if has_errors {
+        process::exit(1);
     }
 
     // Phase 6: check-only — no code generation yet
-    Ok(())
 }

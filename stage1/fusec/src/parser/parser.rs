@@ -88,18 +88,27 @@ impl Parser {
         while self.at(&Tok::At) { anns.push(self.annotation()?); }
 
         match self.peek() {
-            Tok::Fn => Ok(Decl::Fn(self.fn_decl(anns)?)),
+            Tok::Fn => Ok(Decl::Fn(self.fn_decl(anns, false, false)?)),
+            Tok::Async => {
+                self.pos += 1;
+                Ok(Decl::Fn(self.fn_decl(anns, true, false)?))
+            }
+            Tok::Suspend => {
+                self.pos += 1;
+                let is_async = self.eat(&Tok::Async);
+                Ok(Decl::Fn(self.fn_decl(anns, is_async, true)?))
+            }
             Tok::Enum => Ok(Decl::Enum(self.enum_decl(anns)?)),
             Tok::Struct => Ok(Decl::Struct(self.struct_decl(anns)?)),
             Tok::Ident(s) if s == "data" => Ok(Decl::DataClass(self.data_class_decl(anns)?)),
-            Tok::Val => { let d = self.val_decl()?; Ok(Decl::TopVal { name: d.0, ty: d.1, value: d.2, span: d.3 }) }
-            Tok::Var => { let d = self.var_decl()?; Ok(Decl::TopVar { name: d.0, ty: d.1, value: d.2, span: d.3 }) }
+            Tok::Val => { let d = self.val_decl()?; Ok(Decl::TopVal { name: d.0, ty: d.2, value: d.3, annotations: anns, span: d.4 }) }
+            Tok::Var => { let d = self.var_decl()?; Ok(Decl::TopVar { name: d.0, ty: d.1, value: d.2, annotations: anns, span: d.3 }) }
             _ => Err(self.err("expected declaration")),
         }
     }
 
     // ── fn ───────────────────────────────────────────────────────────
-    fn fn_decl(&mut self, annotations: Vec<Annotation>) -> Result<FnDecl, FuseError> {
+    fn fn_decl(&mut self, annotations: Vec<Annotation>, is_async: bool, is_suspend: bool) -> Result<FnDecl, FuseError> {
         let span = self.span();
         self.expect(&Tok::Fn, "fn")?;
         let mut name = self.expect_ident("function name")?;
@@ -121,7 +130,7 @@ impl Parser {
         } else {
             FnBody::Block(self.block()?)
         };
-        Ok(FnDecl { name, ext_type, params, ret_ty, body, annotations, span })
+        Ok(FnDecl { name, ext_type, params, ret_ty, body, annotations, is_async, is_suspend, span })
     }
 
     fn param(&mut self) -> Result<Param, FuseError> {
@@ -177,7 +186,7 @@ impl Parser {
         let mut fields = Vec::new();
         let mut methods = Vec::new();
         while !self.at(&Tok::RBrace) {
-            if self.at(&Tok::Fn) { methods.push(self.fn_decl(vec![])?); }
+            if self.at(&Tok::Fn) { methods.push(self.fn_decl(vec![], false, false)?); }
             else if self.at(&Tok::Val) || self.at(&Tok::Var) { fields.push(self.field()?); }
             else { return Err(self.err("expected field or method in struct")); }
         }
@@ -212,7 +221,7 @@ impl Parser {
         if self.at(&Tok::LBrace) {
             self.pos += 1;
             while !self.at(&Tok::RBrace) {
-                if self.at(&Tok::Fn) { methods.push(self.fn_decl(vec![])?); }
+                if self.at(&Tok::Fn) { methods.push(self.fn_decl(vec![], false, false)?); }
                 else { return Err(self.err("expected method in data class body")); }
             }
             self.expect(&Tok::RBrace, "data class body")?;
@@ -235,7 +244,33 @@ impl Parser {
 
     fn stmt(&mut self) -> Result<Stmt, FuseError> {
         match self.peek() {
-            Tok::Val => { let d = self.val_decl()?; Ok(Stmt::Val { name: d.0, ty: d.1, value: d.2, span: d.3 }) }
+            Tok::Val => {
+                // Check for tuple destructuring: val (a, b) = expr
+                let span = self.span();
+                self.pos += 1; // consume val
+                if self.at(&Tok::LParen) {
+                    self.pos += 1;
+                    let mut names = Vec::new();
+                    names.push(self.expect_ident("val tuple")?);
+                    while self.eat(&Tok::Comma) { names.push(self.expect_ident("val tuple")?); }
+                    self.expect(&Tok::RParen, "val tuple")?;
+                    self.expect(&Tok::Eq, "val tuple")?;
+                    let value = self.expr()?;
+                    Ok(Stmt::ValTuple { names, value, span })
+                } else {
+                    // optional convention: val ref x = ..., val mutref x = ...
+                    let conv = match self.peek() {
+                        Tok::Ref => { self.pos += 1; Some("ref".to_string()) }
+                        Tok::Mutref => { self.pos += 1; Some("mutref".to_string()) }
+                        _ => None,
+                    };
+                    let name = self.expect_ident("val name")?;
+                    let ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
+                    self.expect(&Tok::Eq, "val")?;
+                    let value = self.expr()?;
+                    Ok(Stmt::Val { name, convention: conv, ty, value, span })
+                }
+            }
             Tok::Var => { let d = self.var_decl()?; Ok(Stmt::Var { name: d.0, ty: d.1, value: d.2, span: d.3 }) }
             Tok::Return => self.return_stmt(),
             Tok::Defer => self.defer_stmt(),
@@ -255,14 +290,20 @@ impl Parser {
         }
     }
 
-    fn val_decl(&mut self) -> Result<(String, Option<TypeExpr>, Expr, Span), FuseError> {
+    fn val_decl(&mut self) -> Result<(String, Option<String>, Option<TypeExpr>, Expr, Span), FuseError> {
         let span = self.span();
         self.expect(&Tok::Val, "val")?;
+        // optional convention: val ref x = ..., val mutref x = ...
+        let conv = match self.peek() {
+            Tok::Ref => { self.pos += 1; Some("ref".to_string()) }
+            Tok::Mutref => { self.pos += 1; Some("mutref".to_string()) }
+            _ => None,
+        };
         let name = self.expect_ident("val name")?;
         let ty = if self.eat(&Tok::Colon) { Some(self.type_expr()?) } else { None };
         self.expect(&Tok::Eq, "val")?;
         let value = self.expr()?;
-        Ok((name, ty, value, span))
+        Ok((name, conv, ty, value, span))
     }
 
     fn var_decl(&mut self) -> Result<(String, Option<TypeExpr>, Expr, Span), FuseError> {
@@ -412,6 +453,13 @@ impl Parser {
             Tok::Move  => { let sp = self.span(); self.pos += 1; let o = self.unary()?; Ok(Expr::Move(Box::new(o), sp)) }
             Tok::Ref   => { let sp = self.span(); self.pos += 1; let o = self.unary()?; Ok(Expr::RefE(Box::new(o), sp)) }
             Tok::Mutref => { let sp = self.span(); self.pos += 1; let o = self.unary()?; Ok(Expr::MutrefE(Box::new(o), sp)) }
+            Tok::Await => { let sp = self.span(); self.pos += 1; let o = self.unary()?; Ok(Expr::Await(Box::new(o), sp)) }
+            Tok::Spawn => {
+                let sp = self.span(); self.pos += 1;
+                let is_async = self.eat(&Tok::Async);
+                let o = self.unary()?;
+                Ok(Expr::Spawn(Box::new(o), is_async, sp))
+            }
             _ => self.postfix(),
         }
     }
@@ -423,6 +471,27 @@ impl Parser {
                 let name = self.expect_ident("field")?;
                 let span = expr_span(&e);
                 e = Expr::Field(Box::new(e), name, span);
+            } else if self.eat(&Tok::ColonColon) {
+                // Handle :: path expressions: Shared::new, Chan::<T>
+                // Skip optional turbofish: ::<Type>
+                if self.eat(&Tok::Lt) {
+                    // turbofish ::<T> — parse type args then skip >
+                    let _ty = self.type_expr()?;
+                    while self.eat(&Tok::Comma) { let _ = self.type_expr()?; }
+                    self.expect(&Tok::Gt, "turbofish")?;
+                }
+                if matches!(self.peek(), Tok::Ident(_)) {
+                    let name = self.expect_ident("::")?;
+                    let span = expr_span(&e);
+                    e = Expr::Path(Box::new(e), name, span);
+                }
+            } else if self.at(&Tok::Lt) && self.is_generic_namespace() {
+                // Handle Type<Args>.method() — e.g. SIMD<Float32, 4>.sum(values)
+                self.pos += 1; // <
+                let _ty = self.type_expr()?;
+                while self.eat(&Tok::Comma) { let _ = self.type_expr()?; }
+                self.expect(&Tok::Gt, "generic namespace")?;
+                // continue postfix loop — next will likely be .field or .method
             } else if self.eat(&Tok::QuestionDot) {
                 let name = self.expect_ident("?. field")?;
                 let span = expr_span(&e);
@@ -583,6 +652,27 @@ impl Parser {
         matches!(self.tokens.get(i).map(|t| &t.ty), Some(Tok::FatArrow))
     }
 
+    /// Lookahead: is the current `<` part of a generic namespace like `SIMD<Float32, 4>.sum()`?
+    /// Returns true if we see `< ... >` followed by `.`
+    fn is_generic_namespace(&self) -> bool {
+        let mut i = self.pos;
+        if self.tokens.get(i).map(|t| &t.ty) != Some(&Tok::Lt) { return false; }
+        i += 1;
+        let mut depth = 1u32;
+        while let Some(t) = self.tokens.get(i) {
+            match &t.ty {
+                Tok::Lt => depth += 1,
+                Tok::Gt => { depth -= 1; if depth == 0 { break; } }
+                Tok::Eof => return false,
+                _ => {}
+            }
+            i += 1;
+        }
+        if depth != 0 { return false; }
+        i += 1; // skip >
+        matches!(self.tokens.get(i).map(|t| &t.ty), Some(Tok::Dot))
+    }
+
     fn lambda(&mut self) -> Result<Expr, FuseError> {
         let span = self.span();
         self.expect(&Tok::LBrace, "lambda")?;
@@ -659,6 +749,11 @@ impl Parser {
             self.expect(&Tok::RParen, "unit type")?;
             return Ok(TypeExpr::Simple("Unit".into(), span));
         }
+        // Allow integer literals as generic args (e.g. SIMD<Float32, 4>)
+        if let Tok::Int(v) = self.peek().clone() {
+            self.pos += 1;
+            return Ok(TypeExpr::Simple(v.to_string(), span));
+        }
         let name = self.expect_ident("type name")?;
         if self.eat(&Tok::Lt) {
             let mut args = vec![self.type_expr()?];
@@ -692,6 +787,7 @@ pub fn expr_span(e: &Expr) -> Span {
         | Expr::Call(_, _, s) | Expr::Field(_, _, s) | Expr::OptChain(_, _, s)
         | Expr::Question(_, s) | Expr::Elvis(_, _, s) | Expr::Match(_, _, s)
         | Expr::When(_, s) | Expr::Lambda(_, _, s) | Expr::Move(_, s)
-        | Expr::MutrefE(_, s) | Expr::RefE(_, s) | Expr::Block(_, s) => s.clone(),
+        | Expr::MutrefE(_, s) | Expr::RefE(_, s) | Expr::Block(_, s)
+        | Expr::Spawn(_, _, s) | Expr::Await(_, s) | Expr::Path(_, _, s) => s.clone(),
     }
 }

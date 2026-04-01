@@ -1,7 +1,7 @@
 // EXPECTED ERROR:
 // error: match is not exhaustive
 //        missing case: `Error(Int)`
-//   --> match_missing_arm.fuse:14:3
+//   --> match_missing_arm.fuse:13:3
 
 enum FetchResult {
   Found(String)
