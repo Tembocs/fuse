@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from lexer import Lexer
 from parser import Parser
+from checker import Checker
 from errors import FuseError
 
 
@@ -56,9 +57,16 @@ def main():
         parser = Parser(tokens, filepath)
         program = parser.parse()
 
-        if mode == "check":
-            print("Check not yet implemented (Phase 3).")
-            return
+        if mode in ("check", "parse"):
+            chk = Checker(program, filepath)
+            errors = chk.check()
+            if errors:
+                for e in errors:
+                    print(e, file=sys.stderr)
+                sys.exit(1)
+            if mode == "check":
+                print("No errors.")
+                return
 
         # Default: print AST summary
         for decl in program.declarations:

@@ -17,10 +17,10 @@ class FuseError(Exception):
         super().__init__(self.message)
 
     def __str__(self):
-        loc = f"  --> {self.filename}:{self.line}:{self.col}"
-        result = f"error: {self.message}\n{loc}"
+        result = f"error: {self.message}"
         if self.hint:
-            result += f"\n  hint: {self.hint}"
+            result += f"\n       {self.hint}"
+        result += f"\n  --> {self.filename}:{self.line}:{self.col}"
         return result
 
 

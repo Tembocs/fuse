@@ -215,8 +215,7 @@ Phase 2 is complete. The parser produces an AST for all Core test files.
 - `ref` parameters cannot be assigned through or moved from inside the function
 - `mutref` parameters can be modified but not moved or consumed
 - `owned` parameters give full rights — the function may move or destroy the value
-- A `move val` at a call site marks `val` as consumed — any subsequent use of
-  `val` in the same scope is an error
+- A `move val` at a call site marks `val` as consumed — any subsequent use of `val` in the same scope is an error
 - `mutref` must be explicitly written at the call site — implicit mutation
   is not permitted
 
