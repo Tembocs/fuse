@@ -104,6 +104,24 @@ impl Evaluator {
     // ══════════════════════════════════════════════════════════════════
 
     pub fn run(&mut self) {
+        // Evaluate top-level val/var declarations
+        let decls = self.program.decls.clone();
+        for decl in &decls {
+            match decl {
+                Decl::TopVal { name, value, .. } | Decl::TopVar { name, value, .. } => {
+                    let mut env = Env::new();
+                    // Make already-evaluated globals available
+                    for (k, v) in &self.globals { env.define(k, v.clone()); }
+                    let val = match self.eval_expr(value, &mut env) {
+                        Ok(v) => v,
+                        Err(ControlFlow::Return(v)) => v,
+                    };
+                    self.globals.insert(name.clone(), val);
+                }
+                _ => {}
+            }
+        }
+
         // Find @entrypoint fn
         let entry = self.program.decls.clone().into_iter().find_map(|d| {
             if let Decl::Fn(f) = d {
@@ -130,6 +148,8 @@ impl Evaluator {
     /// contains the final values of mutref parameters to write back to the caller.
     fn call_fn_inner(&mut self, decl: &FnDecl, args: Vec<FuseValue>, self_val: Option<FuseValue>) -> (FuseValue, HashMap<String, FuseValue>) {
         let mut env = Env::new();
+        // Make globals available
+        for (k, v) in &self.globals { env.define(k, v.clone()); }
         let mut arg_idx = 0;
         let mut mutref_params: Vec<String> = Vec::new();
         for p in &decl.params {
@@ -196,6 +216,85 @@ impl Evaluator {
                     if m.name == method {
                         return self.call_fn(&m.clone(), args, Some(obj.clone()));
                     }
+                }
+            }
+        }
+
+        // Chan methods: .send(val), .recv()
+        if let FuseValue::Struct(ref s) = obj {
+            if s.type_name == "Chan" {
+                match method {
+                    "send" => {
+                        // Push value into the channel buffer
+                        // Need to mutate via the global CHAN_STORE
+                        if let Some(val) = args.into_iter().next() {
+                            CHAN_BUFFER.with(|buf| buf.borrow_mut().push(val));
+                        }
+                        return FuseValue::Unit;
+                    }
+                    "recv" => {
+                        // Pop value from channel buffer
+                        let val = CHAN_BUFFER.with(|buf| {
+                            let mut b = buf.borrow_mut();
+                            if b.is_empty() { FuseValue::none() } else { FuseValue::ok(b.remove(0)) }
+                        });
+                        return val;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Shared<T> methods: .read() and .write()
+        if let FuseValue::Struct(ref s) = obj {
+            if s.type_name == "Shared" {
+                match method {
+                    "read" | "write" => {
+                        return s.fields.iter()
+                            .find(|(k, _)| k == "value")
+                            .map(|(_, v)| v.clone())
+                            .unwrap_or(FuseValue::Unit);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // Chan namespace methods: .unbounded(), .bounded(n)
+        if let FuseValue::Fn(ref f) = obj {
+            if f.name == "Chan" {
+                match method {
+                    "unbounded" => {
+                        // Return a (tx, rx) pair as a List of two channel endpoints
+                        let chan = FuseValue::new_struct("Chan", vec![
+                            ("buffer", FuseValue::List(vec![])),
+                        ], None);
+                        return FuseValue::List(vec![chan.clone(), chan]);
+                    }
+                    "bounded" => {
+                        let _capacity = args.first().map(|a| a.as_int()).unwrap_or(1);
+                        let chan = FuseValue::new_struct("Chan", vec![
+                            ("buffer", FuseValue::List(vec![])),
+                        ], None);
+                        return FuseValue::List(vec![chan.clone(), chan]);
+                    }
+                    _ => {}
+                }
+            }
+        }
+
+        // SIMD<T,N> namespace: .sum()
+        if let FuseValue::Fn(ref f) = obj {
+            if f.name.starts_with("SIMD") || type_name == "Fn" {
+                match method {
+                    "sum" => {
+                        // SIMD<Float32, N>.sum(values) — just sum the list
+                        if let Some(list) = args.first() {
+                            return fuse_list_sum(list);
+                        }
+                        return FuseValue::Float(0.0);
+                    }
+                    _ => {}
                 }
             }
         }
@@ -519,10 +618,17 @@ impl Evaluator {
             Expr::Ident(name, _) => {
                 if let Some(v) = env.get(name) { return Ok(v); }
                 // Check enum types
-                if let Some(e) = self.enums.get(name).cloned() {
+                if self.enums.contains_key(name) {
                     return Ok(FuseValue::Str(name.clone())); // enum namespace
                 }
                 if name == "None" { return Ok(FuseValue::none()); }
+                // Type namespaces (SIMD, Chan, Shared, etc.)
+                match name.as_str() {
+                    "SIMD" | "Chan" | "Shared" => {
+                        return Ok(FuseValue::Fn(FuseFn { name: name.clone() }));
+                    }
+                    _ => {}
+                }
                 Ok(FuseValue::Unit)
             }
             Expr::SelfExpr(_) => Ok(env.get("self").unwrap_or(FuseValue::Unit)),
@@ -601,13 +707,23 @@ impl Evaluator {
                 env.pop();
                 Ok(r)
             }
-            Expr::Path(obj, method, _) => {
-                // E.g., Shared::new — just return the method name for now
+            Expr::Path(obj_expr, method, _) => {
+                // Path expressions: Shared::new, Chan::<T>.unbounded, SIMD<T,N>.sum
+                // Return a callable marker so the Call handler can dispatch
+                if let Expr::Ident(name, _) = obj_expr.as_ref() {
+                    return Ok(FuseValue::Fn(FuseFn { name: format!("{name}::{method}") }));
+                }
                 Ok(FuseValue::Unit)
             }
-            Expr::Spawn(_, _, _) | Expr::Await(_, _) => {
-                // Fuse Full — not evaluated in Phase 7
+            Expr::Spawn(inner, _is_async, _) => {
+                // Execute spawned block/call synchronously
+                // (Phase 8: single-threaded; correct for test semantics)
+                self.eval_expr(inner, env)?;
                 Ok(FuseValue::Unit)
+            }
+            Expr::Await(inner, _) => {
+                // Evaluate the awaited expression and return its value
+                self.eval_expr(inner, env)
             }
         }
     }
@@ -637,6 +753,20 @@ impl Evaluator {
                     }
                 }
             }
+        }
+
+        // FuseFn namespace: methods on namespace objects (SIMD, Chan, etc.)
+        if let FuseValue::Fn(ref f) = obj {
+            return Ok(FuseValue::Fn(FuseFn { name: format!("{}.{field}", f.name) }));
+        }
+
+        // Unknown identifier that might be a type namespace (SIMD, etc.)
+        if matches!(obj, FuseValue::Unit) {
+            if let Expr::Ident(name, _) = obj_expr {
+                return Ok(FuseValue::Fn(FuseFn { name: format!("{name}.{field}") }));
+            }
+            // Could be a Path expr that resolved to Unit
+            return Ok(FuseValue::Fn(FuseFn { name: format!("?.{field}") }));
         }
 
         panic!("no field '{field}' on {}", obj.type_name());
@@ -768,8 +898,12 @@ impl Evaluator {
             return Ok(self.call_lambda(&lam, args));
         }
 
-        // Enum variant constructor from field access
+        // Path-based calls: Shared::new, Chan::unbounded/bounded, SIMD::sum
         if let FuseValue::Fn(func) = &callee_val {
+            if func.name.contains("::") {
+                return Ok(self.call_path_fn(&func.name, args));
+            }
+            // Enum variant constructor from field access (e.g., Status.Warn)
             if func.name.contains('.') {
                 let parts: Vec<&str> = func.name.split('.').collect();
                 let val = if args.len() == 1 { Some(args.into_iter().next().unwrap()) } else { None };
@@ -796,6 +930,25 @@ impl Evaluator {
         }
         let del_fn = decl.methods.iter().find(|m| m.name == "__del__").map(|_| "__del__");
         FuseValue::new_struct(&decl.name, fields, del_fn)
+    }
+
+    // ── Path-based function calls (Shared::new, SIMD::sum, etc.) ──
+
+    fn call_path_fn(&mut self, name: &str, args: Vec<FuseValue>) -> FuseValue {
+        match name {
+            "Shared::new" => {
+                // Wrap value in a Shared container (struct with inner value)
+                let inner = args.into_iter().next().unwrap_or(FuseValue::Unit);
+                FuseValue::new_struct("Shared", vec![("value", inner)], None)
+            }
+            _ => {
+                // Chan::String, Chan::Int, etc. — return a Chan type namespace
+                if name.starts_with("Chan::") {
+                    return FuseValue::Fn(FuseFn { name: "Chan".into() });
+                }
+                panic!("unknown path call: {name}");
+            }
+        }
     }
 
     // ── Match ────────────────────────────────────────────────────────
@@ -903,6 +1056,7 @@ use std::cell::RefCell;
 thread_local! {
     static LAMBDA_STORE: RefCell<HashMap<usize, (Vec<String>, Vec<Stmt>)>> = RefCell::new(HashMap::new());
     static LAMBDA_COUNTER: RefCell<usize> = RefCell::new(0);
+    static CHAN_BUFFER: RefCell<Vec<FuseValue>> = RefCell::new(Vec::new());
 }
 
 fn register_lambda(params: Vec<String>, body: Vec<Stmt>) -> usize {
