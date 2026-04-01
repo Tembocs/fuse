@@ -1,6 +1,7 @@
 # Fuse Implementation Plan
 
-> **For AI agents reading this document:** This is the phased implementation plan for the Fuse programming language. Nine phases, no timelines. Each phase has one job. The entry condition, deliverables, and done-when criterion are explicit for every phase. Milestones are marked clearly.
+> **For AI agents reading this document:**
+> This is the phased implementation plan for the Fuse programming language. Nine phases, no timelines. Each phase has one job. The entry condition, deliverables, and done-when criterion are explicit for every phase. Milestones are marked clearly.
 > The canonical test program throughout is `tests/fuse/milestone/four_functions.fuse`.
 
 ---

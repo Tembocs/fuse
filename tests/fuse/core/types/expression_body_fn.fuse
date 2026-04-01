@@ -1,0 +1,13 @@
+// EXPECTED OUTPUT:
+// double(5) = 10
+// add(2, 4) = 6
+
+fn double(ref n: Int) -> Int => n * 2
+
+fn add(ref a: Int, ref b: Int) -> Int => a + b
+
+@entrypoint
+fn main() {
+  println(f"double(5) = {double(5)}")
+  println(f"add(2, 4) = {add(2, 4)}")
+}

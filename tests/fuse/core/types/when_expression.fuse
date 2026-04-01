@@ -1,0 +1,19 @@
+// EXPECTED OUTPUT:
+// small
+// medium
+// large
+
+fn classify(ref n: Int) -> String {
+  when {
+    n < 10  => "small"
+    n < 100 => "medium"
+    else    => "large"
+  }
+}
+
+@entrypoint
+fn main() {
+  println(classify(ref 5))
+  println(classify(ref 50))
+  println(classify(ref 500))
+}

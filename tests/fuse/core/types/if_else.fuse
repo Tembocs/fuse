@@ -1,0 +1,30 @@
+// EXPECTED OUTPUT:
+// positive
+// zero
+// negative
+// large positive
+
+fn classify(ref n: Int) -> String {
+  if n > 0 {
+    "positive"
+  } else if n == 0 {
+    "zero"
+  } else {
+    "negative"
+  }
+}
+
+fn describe(ref n: Int) -> String {
+  if n > 100 {
+    return f"large {classify(ref n)}"
+  }
+  classify(ref n)
+}
+
+@entrypoint
+fn main() {
+  println(classify(ref 5))
+  println(classify(ref 0))
+  println(classify(ref -3))
+  println(describe(ref 200))
+}

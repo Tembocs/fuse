@@ -1,0 +1,16 @@
+// EXPECTED OUTPUT:
+// 1
+// 2
+// 3
+// sum: 6
+
+@entrypoint
+fn main() {
+  val items = [1, 2, 3]
+  var sum = 0
+  for x in items {
+    println(f"{x}")
+    sum = sum + x
+  }
+  println(f"sum: {sum}")
+}

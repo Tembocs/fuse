@@ -85,14 +85,18 @@ building real programs — it just does not yet include parallel execution.
 
 **Included in Core:**
 
-- `fn`, `struct`, `@value`
+- `fn`, `struct`, `data class`, `enum`, `@value`, `@entrypoint`
 - `val`, `var`, type inference
 - `ref`, `mutref`, `owned`, `move` — the full ownership model
-- `Result<T,E>`, `Option<T>`, `match`, `?`
+- `Result<T,E>`, `Option<T>`, `match`, `when`, `?`
+- `if`/`else`, `for`/`in`, `loop`, `return`
 - `List<T>`, `String`, `Int`, `Float`, `Bool`
 - `f"..."` interpolation, `?.` chaining, `?:` Elvis
 - `defer`
 - Extension functions
+- Expression-body functions (`fn foo() => expr`)
+- Block expressions (`val x = { ... }`)
+- Integer division (truncating), float division
 
 **Not in Core (added in Fuse Full):**
 
@@ -108,6 +112,30 @@ as described in this guide in its entirety.
 
 > **Rule:** Implement Core first. A working Core interpreter validates the language
 > design before concurrency complexity is introduced.
+
+### Fuse Core Stability
+
+**Fuse Core is stable.** The Stage 0 Python interpreter implements the complete
+Core feature set. The 26-test Core suite plus the `four_functions.fuse` milestone
+program pass with correct output. The semantics described in this guide are the
+contract that Stage 1 implements.
+
+The following clarifications were established during Stage 0 implementation:
+
+- **`data` is a contextual keyword.** It is only special when followed by `class`.
+  It may be used as a variable name, parameter name, or field name. See ADR-009.
+- **Integer division truncates toward negative infinity** (Python `//` semantics).
+  `10 / 3` evaluates to `3`. Float division (`10.0 / 3.0`) produces a float.
+- **ASAP destruction is last-use scoped within the enclosing function body.**
+  `__del__` fires immediately after the statement containing the last reference.
+  Deferred callbacks fire after all ASAP destruction, at function exit, in
+  reverse registration order. See ADR-010.
+- **`self` parameter type annotations are optional.** When omitted, the type
+  is inferred as `Self`. This applies to methods and `__del__`.
+- **Block expressions** return the value of their last expression statement.
+  `val x = { val a = 1; val b = 2; a + b }` binds `x` to `3`.
+- **`enum` is part of Fuse Core.** It was omitted from the original Core list
+  but is required by `Result<T,E>`, `Option<T>`, and the milestone program.
 
 ---
 

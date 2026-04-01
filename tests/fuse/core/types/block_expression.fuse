@@ -1,0 +1,19 @@
+// EXPECTED OUTPUT:
+// result: 30
+// status: big
+
+@entrypoint
+fn main() {
+  val result = {
+    val x = 10
+    val y = 20
+    x + y
+  }
+  println(f"result: {result}")
+
+  val status = {
+    val n = result
+    if n > 20 { "big" } else { "small" }
+  }
+  println(f"status: {status}")
+}

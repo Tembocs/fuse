@@ -1,0 +1,33 @@
+// EXPECTED OUTPUT:
+// Ok
+// Warn(too high)
+// Err(critical)
+// ok? true
+// warn? false
+
+enum Status {
+  Ok
+  Warn(String)
+  Err(String)
+}
+
+fn isOk(ref s: Status) -> Bool {
+  match s {
+    Status.Ok => true
+    _         => false
+  }
+}
+
+@entrypoint
+fn main() {
+  val ok   = Status.Ok
+  val warn = Status.Warn("too high")
+  val err  = Status.Err("critical")
+
+  println(f"{ok}")
+  println(f"{warn}")
+  println(f"{err}")
+
+  println(f"ok? {isOk(ref ok)}")
+  println(f"warn? {isOk(ref warn)}")
+}

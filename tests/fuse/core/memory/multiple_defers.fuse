@@ -1,0 +1,21 @@
+// EXPECTED OUTPUT:
+// start
+// middle
+// end
+// defer 3
+// defer 2
+// defer 1
+
+fn run() {
+  defer println("defer 1")
+  println("start")
+  defer println("defer 2")
+  println("middle")
+  defer println("defer 3")
+  println("end")
+}
+
+@entrypoint
+fn main() {
+  run()
+}
