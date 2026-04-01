@@ -2,7 +2,7 @@
 name = "fuse-runtime"
 version = "0.1.0"
 edition = "2021"
-description = "Fuse runtime support library"
+description = "Fuse runtime support library — linked into every compiled Fuse program"
 
-[dependencies]
-# Dependencies added in Phase 7+
+[lib]
+crate-type = ["rlib", "staticlib"]

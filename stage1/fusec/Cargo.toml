@@ -9,4 +9,9 @@ name = "fusec"
 path = "src/main.rs"
 
 [dependencies]
-# Cranelift and other dependencies added in Phase 6+
+cranelift = "0.116"
+cranelift-module = "0.116"
+cranelift-object = "0.116"
+cranelift-native = "0.116"
+target-lexicon = "0.13"
+fuse-runtime = { path = "../fuse-runtime" }

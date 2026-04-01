@@ -132,28 +132,46 @@ fn run_fuse_tests() {
     let mut failures = Vec::new();
 
     for tc in &tests {
-        let result = Command::new(&fusec)
-            .arg("--check")
-            .arg(&tc.path)
-            .output()
-            .expect("failed to run fusec");
-
-        let stderr = String::from_utf8_lossy(&result.stderr).to_string();
-        let exit_code = result.status.code().unwrap_or(-1);
         let name = tc.path.file_name().unwrap().to_str().unwrap();
 
         let ok = match tc.kind {
             TestKind::Output => {
-                // Valid test: expect exit 0, no error output
+                // Run the program and compare stdout against expected output
+                let result = Command::new(&fusec)
+                    .arg(&tc.path)
+                    .output()
+                    .expect("failed to run fusec");
+                let exit_code = result.status.code().unwrap_or(-1);
+                let stdout = String::from_utf8_lossy(&result.stdout).to_string();
+                let stderr = String::from_utf8_lossy(&result.stderr).to_string();
+
                 if exit_code != 0 {
                     failures.push(format!("FAIL {name}: expected exit 0, got {exit_code}\n  stderr: {stderr}"));
                     false
                 } else {
-                    true
+                    let expected = tc.expected_lines.join("\n");
+                    let actual = stdout.replace('\r', "").trim_end().to_string();
+                    if actual == expected {
+                        true
+                    } else {
+                        failures.push(format!(
+                            "FAIL {name}: output mismatch\n  expected: {:?}\n  actual:   {:?}",
+                            expected, actual
+                        ));
+                        false
+                    }
                 }
             }
             TestKind::Error => {
-                // Error test: expect exit 1, check stderr matches expected lines
+                // Check mode: expect exit 1
+                let result = Command::new(&fusec)
+                    .arg("--check")
+                    .arg(&tc.path)
+                    .output()
+                    .expect("failed to run fusec");
+                let exit_code = result.status.code().unwrap_or(-1);
+                let stderr = String::from_utf8_lossy(&result.stderr).to_string();
+
                 if exit_code == 0 {
                     failures.push(format!("FAIL {name}: expected exit 1 (error), got 0"));
                     false
@@ -162,7 +180,15 @@ fn run_fuse_tests() {
                 }
             }
             TestKind::Warning => {
-                // Warning test: expect exit 0, check stderr matches expected lines
+                // Check mode: expect exit 0 with warnings
+                let result = Command::new(&fusec)
+                    .arg("--check")
+                    .arg(&tc.path)
+                    .output()
+                    .expect("failed to run fusec");
+                let exit_code = result.status.code().unwrap_or(-1);
+                let stderr = String::from_utf8_lossy(&result.stderr).to_string();
+
                 if exit_code != 0 {
                     failures.push(format!("FAIL {name}: expected exit 0 (warning only), got {exit_code}\n  stderr: {stderr}"));
                     false

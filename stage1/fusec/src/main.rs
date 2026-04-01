@@ -5,12 +5,13 @@ mod parser;
 mod checker;
 mod hir;
 mod codegen;
+mod eval;
 
 use std::{env, fs, process};
-use error::FuseError;
 use lexer::Lexer;
 use parser::Parser;
 use checker::Checker;
+use eval::Evaluator;
 
 fn main() {
     let args: Vec<String> = env::args().collect();
@@ -22,7 +23,7 @@ fn main() {
     let (mode, filepath) = if args[1] == "--check" && args.len() > 2 {
         ("check", &args[2])
     } else {
-        ("check", &args[1]) // Phase 6: check-only is the default
+        ("run", &args[1])
     };
 
     let source = match fs::read_to_string(filepath) {
@@ -33,8 +34,7 @@ fn main() {
     run(mode, &source, filepath);
 }
 
-fn run(_mode: &str, source: &str, filepath: &str) {
-    // Use just the filename for error messages
+fn run(mode: &str, source: &str, filepath: &str) {
     let display_name = std::path::Path::new(filepath)
         .file_name()
         .and_then(|n| n.to_str())
@@ -58,16 +58,18 @@ fn run(_mode: &str, source: &str, filepath: &str) {
     let checker = Checker::new(&program, display_name);
     let diagnostics = checker.check(&program);
 
-    // Print all diagnostics
     for d in &diagnostics {
         eprintln!("{d}");
     }
 
-    // Only true errors cause failure (not warnings)
     let has_errors = diagnostics.iter().any(|e| e.kind == error::ErrorKind::Error);
     if has_errors {
         process::exit(1);
     }
 
-    // Phase 6: check-only — no code generation yet
+    if mode == "check" { return; }
+
+    // Run — tree-walking evaluation using fuse-runtime
+    let mut evaluator = Evaluator::new(program, display_name);
+    evaluator.run();
 }
