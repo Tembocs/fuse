@@ -13,11 +13,28 @@ use parser::Parser;
 use checker::Checker;
 use eval::Evaluator;
 
+const VERSION: &str = "0.1.0";
+
 fn main() {
     let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        eprintln!("Usage: fusec [--check] <file.fuse>");
-        process::exit(1);
+
+    if args.len() < 2 || args[1] == "--help" || args[1] == "-h" {
+        println!("fusec {} — The Fuse compiler", VERSION);
+        println!();
+        println!("Usage: fusec [options] <file.fuse>");
+        println!();
+        println!("Options:");
+        println!("  <file.fuse>       Run a Fuse source file");
+        println!("  --check <file>    Check for errors without running");
+        println!("  --version, -v     Print version");
+        println!("  --help, -h        Print this help");
+        if args.len() < 2 { process::exit(1); }
+        return;
+    }
+
+    if args[1] == "--version" || args[1] == "-v" {
+        println!("fusec {VERSION}");
+        return;
     }
 
     let (mode, filepath) = if args[1] == "--check" && args.len() > 2 {
