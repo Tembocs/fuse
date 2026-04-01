@@ -1,0 +1,12 @@
+# Rust build artifacts
+stage1/target/
+
+# Python bytecode
+stage0/src/__pycache__/
+*.pyc
+
+# IDE / editor
+.claude/
+.vscode/
+.idea/
+*.swp
