@@ -1028,9 +1028,90 @@ The guide precedes the implementation. If a behaviour is not in the language gui
 
 ---
 
+## Appendix D — Recommended implementation sequence
+
+The stages are ordered by dependency, but not every section within a stage must complete before the next stage begins. The self-hosting compiler is written in Fuse Core — Full features (concurrency, async, SIMD) are not required and can be deferred.
+
+### Phase 1: Core native codegen
+
+```
+A.1  HIR node definitions
+A.2  AST to HIR lowering
+A.3  Value layout and ABI
+A.4  Runtime FFI surface
+A.5  Cranelift code generation
+```
+
+A.5 is the largest section (38 subtasks). Build it in layers, testing at each checkpoint:
+
+**Layer 1 — Minimal output** (A.5.1–A.5.6, A.5.34–A.5.38):
+Literals, identifiers, `println`, entry point generation, object emission, linking.
+Checkpoint: `println(42)` compiles to a native binary and prints `42`.
+
+**Layer 2 — Arithmetic and control flow** (A.5.7–A.5.8, A.5.24–A.5.28):
+Binary ops, comparisons, val/var declarations, assignment, if/else, for loops, loop.
+Checkpoint: programs with variables, arithmetic, and branching compile and run.
+
+**Layer 3 — Functions and types** (A.5.9–A.5.12, A.5.19–A.5.20, A.5.33):
+Function calls, method calls, field access, f-strings, struct/data class construction, enum construction, extension function dispatch.
+Checkpoint: programs with structs, enums, and function calls compile and run.
+
+**Layer 4 — Pattern matching and error handling** (A.5.13–A.5.16, A.5.21–A.5.23):
+`?` operator, optional chaining, Elvis, move/ref/mutref, match expressions, when expressions, block expressions.
+Checkpoint: all 26 Core tests compile to native binaries with correct output.
+
+**Layer 5 — Advanced features** (A.5.17–A.5.18, A.5.29–A.5.32):
+Lambdas, list/tuple literals, loop (infinite), defer, ASAP destruction, mutref writeback.
+Checkpoint: `four_functions.fuse` compiles to a native binary with output identical to Stage 0.
+
+### Phase 2: FFI layer
+
+```
+B.1  Language design: extern functions
+B.2  Implement FFI in Stage 1 compiler
+B.3  Cranelift C API wrappers
+B.4  Platform abstraction: file I/O and process management
+```
+
+### Phase 3: Stage 2 compiler
+
+```
+C.1  Error types
+C.2  Token definitions
+C.3  Lexer
+C.4  AST node definitions
+C.5  Parser
+C.6  Checker
+C.7  HIR nodes and lowering
+C.8  Cranelift FFI declarations
+C.9  Code generation
+C.10 CLI entry point
+C.11 Integration testing
+```
+
+### Phase 4: Bootstrap
+
+```
+D.1  Compile fusec2 with Stage 1          → fusec2-bootstrap
+D.2  Compile fusec2 with fusec2-bootstrap → fusec2-stage2
+D.3  Compile fusec2 with fusec2-stage2    → fusec2-verified
+D.4  Reproducibility check (sha256 match)
+D.5  Full test suite on self-compiled compiler
+D.6  Archive Stage 1, tag release
+```
+
+### Deferred
+
+```
+A.6  Codegen for Fuse Full features       (after self-hosting is achieved)
+E.*  Toolchain: build, test, fmt, pkg     (after self-hosting is achieved)
+```
+
+---
+
 *End of Fuse Self-Hosting Plan*
 
 ---
 
 > **For AI agents:**
-> This plan supersedes the Phase 9 section of the main implementation plan. It provides the granular task breakdown that the main plan intentionally omitted. Stage A must be completed before any Stage C work begins — there is no shortcut. The canonical test program remains `tests/fuse/milestone/four_functions.fuse`. Verify output parity across all three stages (Python, Rust, Fuse) at every milestone.
+> This plan supersedes the Phase 9 section of the main implementation plan. It provides the granular task breakdown that the main plan intentionally omitted. Stage A must be completed before any Stage C work begins — there is no shortcut. The canonical test program remains `tests/fuse/milestone/four_functions.fuse`. Verify output parity across all three stages (Python, Rust, Fuse) at every milestone. A.6 and Stage E are deferred until after the bootstrap succeeds.
