@@ -840,14 +840,84 @@ fn intern_str(module: &mut ObjectModule, cache: &mut HashMap<String, DataId>, co
 fn link(obj_path: &str, output_path: &str) {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     let base = std::path::Path::new(manifest_dir).parent().unwrap();
-    let rt_release = base.join("target/release/libfuse_runtime.a");
-    let rt_debug = base.join("target/debug/libfuse_runtime.a");
-    let rt = if rt_release.exists() { rt_release } else { rt_debug };
-    let status = std::process::Command::new("cc")
-        .arg(obj_path).arg(rt.to_str().unwrap())
+
+    // Find runtime library — check both MSVC (.lib) and GNU (.a) naming.
+    let candidates = [
+        base.join("target/release/fuse_runtime.lib"),
+        base.join("target/release/libfuse_runtime.a"),
+        base.join("target/debug/fuse_runtime.lib"),
+        base.join("target/debug/libfuse_runtime.a"),
+    ];
+    let rt = candidates.iter().find(|p| p.exists())
+        .expect("fuse-runtime static library not found — run `cargo build -p fuse-runtime` first");
+
+    let out = if cfg!(windows) && !output_path.ends_with(".exe") {
+        format!("{output_path}.exe")
+    } else {
+        output_path.to_string()
+    };
+
+    if cfg!(target_env = "msvc") {
+        link_msvc(obj_path, rt.to_str().unwrap(), &out);
+    } else {
+        link_gcc(obj_path, rt.to_str().unwrap(), &out);
+    }
+}
+
+fn link_msvc(obj_path: &str, rt_path: &str, output_path: &str) {
+    // Use `rustc -C linker-flavor=msvc` as a linker driver.
+    // We create a trivial .rs file whose only purpose is to give rustc
+    // something to compile, then inject our object file and runtime lib
+    // as extra link arguments. rustc handles finding link.exe, the
+    // Windows SDK, and the CRT — we don't have to locate any of it.
+    let stub_dir = std::path::Path::new(obj_path).parent()
+        .unwrap_or(std::path::Path::new("."));
+    let stub_path = stub_dir.join("_fuse_stub.rs");
+    // The stub uses #![no_main] so rustc doesn't generate its own main().
+    // Our Cranelift-generated main() becomes the real entry point.
+    std::fs::write(&stub_path, "#![no_main]").expect("write stub");
+
+    let obj_abs = std::fs::canonicalize(obj_path).unwrap_or_else(|_| obj_path.into());
+    let rt_abs = std::fs::canonicalize(rt_path).unwrap_or_else(|_| rt_path.into());
+
+    let result = std::process::Command::new("rustc")
+        .arg("--edition=2021")
+        .arg("--crate-type=bin")
+        .arg(stub_path.to_str().unwrap())
         .arg("-o").arg(output_path)
-        .arg("-lpthread").arg("-ldl").arg("-lm")
+        .arg("-C").arg(format!("link-arg={}", obj_abs.display()))
+        .arg("-C").arg(format!("link-arg={}", rt_abs.display()))
         .status();
+
+    let _ = std::fs::remove_file(&stub_path);
+
+    match result {
+        Ok(s) if s.success() => {}
+        Ok(s) => {
+            eprintln!("linker (via rustc) failed: exit {}", s.code().unwrap_or(-1));
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("linker error: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn link_gcc(obj_path: &str, rt_path: &str, output_path: &str) {
+    let linker = if cfg!(windows) { "gcc" } else { "cc" };
+    let mut cmd = std::process::Command::new(linker);
+    cmd.arg(obj_path).arg(rt_path).arg("-o").arg(output_path);
+
+    if cfg!(target_os = "linux") {
+        cmd.arg("-lpthread").arg("-ldl").arg("-lm");
+    } else if cfg!(target_os = "macos") {
+        cmd.arg("-lpthread").arg("-lm");
+    } else if cfg!(windows) {
+        cmd.arg("-lws2_32").arg("-luserenv").arg("-ladvapi32").arg("-lbcrypt").arg("-lntdll");
+    }
+
+    let status = cmd.status();
     match status {
         Ok(s) if s.success() => {}
         Ok(s) => { eprintln!("linker failed: exit {}", s.code().unwrap_or(-1)); std::process::exit(1); }
