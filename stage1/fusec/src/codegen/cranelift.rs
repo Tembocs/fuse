@@ -171,6 +171,8 @@ impl Codegen {
                     HirFnBody::Expr(e) => Some(ctx.expr(e)),
                 };
                 if !ctx.terminated {
+                    // Emit deferred expressions before final return.
+                    ctx.emit_defers();
                     let rv = result.unwrap_or_else(|| ctx.rt("fuse_rt_unit", &[]));
                     ctx.b.ins().return_(&[rv]);
                 }
@@ -265,6 +267,8 @@ struct FnGen<'a, 'b> {
     next_var: usize,
     /// Track whether the current block has been terminated.
     terminated: bool,
+    /// Deferred expressions to execute before function return (LIFO order).
+    defers: Vec<HirExpr>,
 }
 
 impl<'a, 'b> FnGen<'a, 'b> {
@@ -277,7 +281,7 @@ impl<'a, 'b> FnGen<'a, 'b> {
         str_counter: &'a mut usize,
     ) -> Self {
         Self { b, module, fuse_fns, rt_fns, string_data, str_counter,
-               vars: HashMap::new(), next_var: 0, terminated: false }
+               vars: HashMap::new(), next_var: 0, terminated: false, defers: Vec::new() }
     }
 
     fn def(&mut self, name: &str, val: Value) {
@@ -309,6 +313,14 @@ impl<'a, 'b> FnGen<'a, 'b> {
             self.b.inst_results(c)[0]
         } else {
             self.rt("fuse_rt_unit", &[])
+        }
+    }
+
+    /// Emit all deferred expressions in reverse (LIFO) order.
+    fn emit_defers(&mut self) {
+        let defers: Vec<HirExpr> = self.defers.clone();
+        for d in defers.iter().rev() {
+            self.expr(d);
         }
     }
 
@@ -376,6 +388,8 @@ impl<'a, 'b> FnGen<'a, 'b> {
                     Some(ex) => self.expr(ex),
                     None => self.rt("fuse_rt_unit", &[]),
                 };
+                // Emit deferred expressions in reverse (LIFO) before returning.
+                self.emit_defers();
                 self.b.ins().return_(&[v]);
                 self.terminated = true;
                 let nb = self.b.create_block();
@@ -471,7 +485,10 @@ impl<'a, 'b> FnGen<'a, 'b> {
                 self.b.seal_block(ext);
                 None
             }
-            HirStmt::Defer(_, _) => None, // TODO
+            HirStmt::Defer(e, _) => {
+                self.defers.push(e.clone());
+                None
+            }
         }
     }
 
