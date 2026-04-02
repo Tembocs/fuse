@@ -1,0 +1,4 @@
+@entrypoint
+fn main() {
+  println("hi")
+}

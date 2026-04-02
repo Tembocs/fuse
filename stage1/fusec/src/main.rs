@@ -16,6 +16,21 @@ use eval::Evaluator;
 const VERSION: &str = "0.1.0";
 
 fn main() {
+    // Spawn the real main on a thread with a large stack to support
+    // deep recursion in interpreted Fuse programs (Stage 2 self-hosting).
+    let builder = std::thread::Builder::new().stack_size(128 * 1024 * 1024);
+    let handler = builder.spawn(real_main).unwrap();
+    if let Err(e) = handler.join() {
+        if let Some(msg) = e.downcast_ref::<&str>() {
+            eprintln!("{msg}");
+        } else if let Some(msg) = e.downcast_ref::<String>() {
+            eprintln!("{msg}");
+        }
+        process::exit(1);
+    }
+}
+
+fn real_main() {
     let args: Vec<String> = env::args().collect();
 
     if args.len() < 2 || args[1] == "--help" || args[1] == "-h" {

@@ -1,0 +1,1789 @@
+// =============================================================================
+// Fuse Stage 2 -- Self-hosting interpreter written in Fuse.
+//
+// Architecture: Lexer -> Parser -> AST -> Tree-walking Evaluator
+//
+// Execute: fusec stage2/src/main.fuse -- <file.fuse>
+// =============================================================================
+
+
+// =============================================================================
+// Section 1: Token representation
+// =============================================================================
+
+data class Token(val ty: String, val sval: String, val ival: Int, val fval: Float, val line: Int, val col: Int)
+
+fn mkTok(ty: String, line: Int, col: Int) -> Token {
+  Token(ty, "", 0, 0.0, line, col)
+}
+
+fn mkTokS(ty: String, sval: String, line: Int, col: Int) -> Token {
+  Token(ty, sval, 0, 0.0, line, col)
+}
+
+fn mkTokI(ty: String, ival: Int, line: Int, col: Int) -> Token {
+  Token(ty, "", ival, 0.0, line, col)
+}
+
+fn mkTokF(ty: String, fval: Float, line: Int, col: Int) -> Token {
+  Token(ty, "", 0, fval, line, col)
+}
+
+
+// =============================================================================
+// Section 2: Lexer
+// =============================================================================
+
+data class Lexer(val src: String, var pos: Int, var line: Int, var col: Int)
+
+fn newLexer(source: String) -> Lexer { Lexer(source, 0, 1, 1) }
+
+fn Lexer.cur(ref self) -> String {
+  if self.pos >= self.src.len() { return "" }
+  self.src.charAt(self.pos)
+}
+
+fn Lexer.peek(ref self, off: Int) -> String {
+  val idx = self.pos + off
+  if idx >= self.src.len() { return "" }
+  self.src.charAt(idx)
+}
+
+fn Lexer.advance(mutref self) -> String {
+  if self.pos >= self.src.len() { return "" }
+  val ch = self.src.charAt(self.pos)
+  self.pos = self.pos + 1
+  if ch == "\n" { self.line = self.line + 1  self.col = 1 }
+  else { self.col = self.col + 1 }
+  ch
+}
+
+fn isAlpha(ch: String) -> Bool {
+  if ch.len() == 0 { return false }
+  val c = ch.charCodeAt(0)
+  val upper = c >= 65 and c <= 90
+  val lower = c >= 97 and c <= 122
+  val under = c == 95
+  upper or lower or under
+}
+
+fn isDigit(ch: String) -> Bool {
+  if ch.len() == 0 { return false }
+  val c = ch.charCodeAt(0)
+  c >= 48 and c <= 57
+}
+
+fn isAlphaNum(ch: String) -> Bool {
+  isAlpha(ch) or isDigit(ch)
+}
+
+fn keyword(s: String) -> String {
+  if s == "fn" { return "fn" }
+  if s == "val" { return "val" }
+  if s == "var" { return "var" }
+  if s == "ref" { return "ref" }
+  if s == "mutref" { return "mutref" }
+  if s == "owned" { return "owned" }
+  if s == "move" { return "move" }
+  if s == "struct" { return "struct" }
+  if s == "class" { return "class" }
+  if s == "enum" { return "enum" }
+  if s == "match" { return "match" }
+  if s == "when" { return "when" }
+  if s == "if" { return "if" }
+  if s == "else" { return "else" }
+  if s == "for" { return "for" }
+  if s == "in" { return "in" }
+  if s == "return" { return "return" }
+  if s == "defer" { return "defer" }
+  if s == "and" { return "and" }
+  if s == "or" { return "or" }
+  if s == "not" { return "not" }
+  if s == "true" { return "true" }
+  if s == "false" { return "false" }
+  if s == "self" { return "self" }
+  if s == "data" { return "data" }
+  ""
+}
+
+fn skipWsLoop(mutref lex: Lexer) {
+  if lex.pos >= lex.src.len() { return }
+  val ch = lex.cur()
+  if ch == " " or ch == "\t" or ch == "\r" or ch == "\n" {
+    lex.advance()
+    skipWsLoop(mutref lex)
+  } else if ch == "/" and lex.peek(1) == "/" {
+    skipComment(mutref lex)
+    skipWsLoop(mutref lex)
+  }
+}
+
+fn skipComment(mutref lex: Lexer) {
+  if lex.pos >= lex.src.len() { return }
+  if lex.cur() == "\n" { return }
+  lex.advance()
+  skipComment(mutref lex)
+}
+
+fn readNumberLoop(mutref lex: Lexer, mutref s: String, mutref isFloat: Bool) {
+  if lex.pos >= lex.src.len() { return }
+  val ch = lex.cur()
+  if isDigit(ch) {
+    s = s + lex.advance()
+    readNumberLoop(mutref lex, mutref s, mutref isFloat)
+  } else if ch == "." {
+    if lex.peek(1) == "." { return }
+    if isAlpha(lex.peek(1)) { return }
+    isFloat = true
+    s = s + lex.advance()
+    readNumberLoop(mutref lex, mutref s, mutref isFloat)
+  }
+}
+
+fn Lexer.readNumber(mutref self) -> Token {
+  val sl = self.line
+  val sc = self.col
+  var s = ""
+  var isFloat = false
+  readNumberLoop(mutref self, mutref s, mutref isFloat)
+  if isFloat {
+    match parseFloat(s) {
+      Ok(v) => mkTokF("Float", v, sl, sc)
+      Err(_) => mkTokF("Float", 0.0, sl, sc)
+    }
+  } else {
+    match parseInt(s) {
+      Ok(v) => mkTokI("Int", v, sl, sc)
+      Err(_) => mkTokI("Int", 0, sl, sc)
+    }
+  }
+}
+
+fn Lexer.readEscape(mutref self) -> String {
+  if self.pos >= self.src.len() { return "" }
+  val ch = self.advance()
+  if ch == "n" { return "\n" }
+  if ch == "t" { return "\t" }
+  if ch == "\\" { return "\\" }
+  if ch == "\"" { return "\"" }
+  if ch == "{" { return "{" }
+  if ch == "}" { return "}" }
+  ch
+}
+
+fn readStrLoop(mutref lex: Lexer, mutref s: String) {
+  if lex.pos >= lex.src.len() { return }
+  if lex.cur() == "\"" { return }
+  if lex.cur() == "\\" {
+    lex.advance()
+    s = s + lex.readEscape()
+  } else {
+    s = s + lex.advance()
+  }
+  readStrLoop(mutref lex, mutref s)
+}
+
+fn Lexer.readString(mutref self) -> Token {
+  val sl = self.line
+  val sc = self.col
+  self.advance() // skip "
+  var s = ""
+  readStrLoop(mutref self, mutref s)
+  if self.pos < self.src.len() { self.advance() } // skip closing "
+  mkTokS("Str", s, sl, sc)
+}
+
+fn readFsExprLoop(mutref lex: Lexer, mutref s: String, mutref depth: Int) {
+  if lex.pos >= lex.src.len() or depth <= 0 { return }
+  val ch = lex.cur()
+  if ch == "{" {
+    depth = depth + 1
+    s = s + lex.advance()
+    readFsExprLoop(mutref lex, mutref s, mutref depth)
+  } else if ch == "}" {
+    depth = depth - 1
+    if depth > 0 {
+      s = s + lex.advance()
+      readFsExprLoop(mutref lex, mutref s, mutref depth)
+    } else {
+      lex.advance()
+    }
+  } else {
+    s = s + lex.advance()
+    readFsExprLoop(mutref lex, mutref s, mutref depth)
+  }
+}
+
+fn readFsLoop(mutref lex: Lexer, mutref parts: String, mutref buf: String) {
+  if lex.pos >= lex.src.len() or lex.cur() == "\"" { return }
+  if lex.cur() == "{" {
+    if buf.len() > 0 {
+      if parts.len() > 0 { parts = parts + "\x01" }
+      parts = parts + "L" + buf
+      buf = ""
+    }
+    lex.advance()
+    var expr = ""
+    var depth = 1
+    readFsExprLoop(mutref lex, mutref expr, mutref depth)
+    if parts.len() > 0 { parts = parts + "\x01" }
+    parts = parts + "E" + expr
+  } else if lex.cur() == "\\" {
+    lex.advance()
+    buf = buf + lex.readEscape()
+  } else {
+    buf = buf + lex.advance()
+  }
+  readFsLoop(mutref lex, mutref parts, mutref buf)
+}
+
+fn Lexer.readFString(mutref self) -> Token {
+  val sl = self.line
+  val sc = self.col
+  self.advance() // f
+  self.advance() // "
+  var parts = ""
+  var buf = ""
+  readFsLoop(mutref self, mutref parts, mutref buf)
+  if buf.len() > 0 {
+    if parts.len() > 0 { parts = parts + "\x01" }
+    parts = parts + "L" + buf
+  }
+  if self.pos < self.src.len() { self.advance() } // "
+  mkTokS("FString", parts, sl, sc)
+}
+
+fn readIdentLoop(mutref lex: Lexer, mutref s: String) {
+  if lex.pos >= lex.src.len() { return }
+  if isAlphaNum(lex.cur()) {
+    s = s + lex.advance()
+    readIdentLoop(mutref lex, mutref s)
+  }
+}
+
+fn Lexer.readIdent(mutref self) -> Token {
+  val sl = self.line
+  val sc = self.col
+  var s = ""
+  readIdentLoop(mutref self, mutref s)
+  val kw = keyword(s)
+  if kw == "true" { return mkTokS("Bool", "true", sl, sc) }
+  if kw == "false" { return mkTokS("Bool", "false", sl, sc) }
+  if kw != "" { return mkTokS(kw, s, sl, sc) }
+  mkTokS("Ident", s, sl, sc)
+}
+
+fn Lexer.readOp(mutref self) -> Token {
+  val sl = self.line
+  val sc = self.col
+  val c1 = self.cur()
+  val c2 = self.peek(1)
+  val two = c1 + c2
+  if two == "=>" { self.advance() self.advance() return mkTok("FatArrow", sl, sc) }
+  if two == "->" { self.advance() self.advance() return mkTok("Arrow", sl, sc) }
+  if two == "?." { self.advance() self.advance() return mkTok("QuestionDot", sl, sc) }
+  if two == "?:" { self.advance() self.advance() return mkTok("Elvis", sl, sc) }
+  if two == "==" { self.advance() self.advance() return mkTok("EqEq", sl, sc) }
+  if two == "!=" { self.advance() self.advance() return mkTok("BangEq", sl, sc) }
+  if two == "<=" { self.advance() self.advance() return mkTok("LtEq", sl, sc) }
+  if two == ">=" { self.advance() self.advance() return mkTok("GtEq", sl, sc) }
+  if two == "::" { self.advance() self.advance() return mkTok("ColonColon", sl, sc) }
+  if two == ".." { self.advance() self.advance() return mkTok("DotDot", sl, sc) }
+  self.advance()
+  if c1 == "?" { return mkTok("Question", sl, sc) }
+  if c1 == "@" { return mkTok("At", sl, sc) }
+  if c1 == "." { return mkTok("Dot", sl, sc) }
+  if c1 == ":" { return mkTok("Colon", sl, sc) }
+  if c1 == "=" { return mkTok("Eq", sl, sc) }
+  if c1 == "<" { return mkTok("Lt", sl, sc) }
+  if c1 == ">" { return mkTok("Gt", sl, sc) }
+  if c1 == "+" { return mkTok("Plus", sl, sc) }
+  if c1 == "-" { return mkTok("Minus", sl, sc) }
+  if c1 == "*" { return mkTok("Star", sl, sc) }
+  if c1 == "/" { return mkTok("Slash", sl, sc) }
+  if c1 == "%" { return mkTok("Percent", sl, sc) }
+  if c1 == "|" { return mkTok("Pipe", sl, sc) }
+  if c1 == "(" { return mkTok("LParen", sl, sc) }
+  if c1 == ")" { return mkTok("RParen", sl, sc) }
+  if c1 == "{" { return mkTok("LBrace", sl, sc) }
+  if c1 == "}" { return mkTok("RBrace", sl, sc) }
+  if c1 == "[" { return mkTok("LBracket", sl, sc) }
+  if c1 == "]" { return mkTok("RBracket", sl, sc) }
+  if c1 == "," { return mkTok("Comma", sl, sc) }
+  if c1 == ";" { return mkTok("Semicolon", sl, sc) }
+  mkTok("Unknown", sl, sc)
+}
+
+fn tokenizeLoop(mutref lex: Lexer, mutref tokens: List<Token>) {
+  skipWsLoop(mutref lex)
+  if lex.pos >= lex.src.len() { return }
+  val ch = lex.cur()
+  if isDigit(ch) { tokens.push(lex.readNumber()) }
+  else if ch == "\"" { tokens.push(lex.readString()) }
+  else if ch == "f" and lex.peek(1) == "\"" { tokens.push(lex.readFString()) }
+  else if isAlpha(ch) { tokens.push(lex.readIdent()) }
+  else { tokens.push(lex.readOp()) }
+  tokenizeLoop(mutref lex, mutref tokens)
+}
+
+fn tokenize(source: String) -> List<Token> {
+  var lex = newLexer(source)
+  var tokens: List<Token> = []
+  tokenizeLoop(mutref lex, mutref tokens)
+  tokens.push(mkTok("Eof", lex.line, lex.col))
+  tokens
+}
+
+
+// =============================================================================
+// Section 3: AST nodes
+// =============================================================================
+
+data class Node(val kind: String, val sval: String, val ival: Int, val fval: Float, val bval: Bool, val children: List<Node>, val items: List<Node>)
+
+fn nd(kind: String) -> Node { Node(kind, "", 0, 0.0, false, [], []) }
+fn ndS(kind: String, s: String) -> Node { Node(kind, s, 0, 0.0, false, [], []) }
+fn ndI(kind: String, i: Int) -> Node { Node(kind, "", i, 0.0, false, [], []) }
+fn ndF(kind: String, f: Float) -> Node { Node(kind, "", 0, f, false, [], []) }
+fn ndB(kind: String, b: Bool) -> Node { Node(kind, "", 0, 0.0, b, [], []) }
+fn ndC(kind: String, ch: List<Node>) -> Node { Node(kind, "", 0, 0.0, false, ch, []) }
+fn ndSC(kind: String, s: String, ch: List<Node>) -> Node { Node(kind, s, 0, 0.0, false, ch, []) }
+fn ndSI(kind: String, s: String, ch: List<Node>, it: List<Node>) -> Node { Node(kind, s, 0, 0.0, false, ch, it) }
+
+
+// =============================================================================
+// Section 4: Parser
+// =============================================================================
+
+data class Parser(val tokens: List<Token>, var pos: Int, var allowBrace: Bool)
+
+fn newParser(tokens: List<Token>) -> Parser { Parser(tokens, 0, true) }
+
+fn Parser.peekTy(ref self) -> String { self.tokens.get(self.pos).ty }
+fn Parser.at(ref self, ty: String) -> Bool { self.peekTy() == ty }
+fn Parser.atEof(ref self) -> Bool { self.peekTy() == "Eof" }
+fn Parser.advance(mutref self) -> Token { val t = self.tokens.get(self.pos) self.pos = self.pos + 1 t }
+fn Parser.eat(mutref self, ty: String) -> Bool {
+  if self.peekTy() == ty { self.pos = self.pos + 1 true } else { false }
+}
+fn Parser.expect(mutref self, ty: String, ctx: String) -> Token {
+  if self.peekTy() == ty { return self.advance() }
+  panic(f"expected {ty}, got {self.peekTy()} in {ctx} at line {self.tokens.get(self.pos).line}")
+}
+fn Parser.expectIdent(mutref self, ctx: String) -> String {
+  if self.peekTy() == "Ident" { val s = self.tokens.get(self.pos).sval self.pos = self.pos + 1 return s }
+  if self.peekTy() == "self" { self.pos = self.pos + 1 return "self" }
+  panic(f"expected ident, got {self.peekTy()} in {ctx} at line {self.tokens.get(self.pos).line}")
+}
+
+// ── Program ──
+
+fn Parser.parseProgram(mutref self) -> Node {
+  var decls: List<Node> = []
+  ppLoop(mutref self, mutref decls)
+  ndC("Program", decls)
+}
+fn ppLoop(mutref p: Parser, mutref d: List<Node>) {
+  if p.atEof() { return }
+  d.push(p.parseDecl())
+  ppLoop(mutref p, mutref d)
+}
+
+fn Parser.parseAnnotation(mutref self) -> Node {
+  self.expect("At", "ann")
+  val name = self.expectIdent("ann")
+  if self.eat("LParen") { skipParens(mutref self, 1) }
+  ndS("Ann", name)
+}
+fn skipParens(mutref p: Parser, depth: Int) {
+  if depth <= 0 { return }
+  if p.peekTy() == "LParen" { p.advance() skipParens(mutref p, depth + 1) return }
+  if p.peekTy() == "RParen" { p.advance() skipParens(mutref p, depth - 1) return }
+  p.advance()
+  skipParens(mutref p, depth)
+}
+
+fn Parser.parseDecl(mutref self) -> Node {
+  var anns: List<Node> = []
+  pAnns(mutref self, mutref anns)
+  val ty = self.peekTy()
+  if ty == "fn" { return self.parseFnDecl(anns) }
+  if ty == "enum" { return self.parseEnumDecl() }
+  if ty == "struct" { return self.parseStructDecl() }
+  if ty == "data" { return self.parseDataClassDecl() }
+  if ty == "val" { return self.parseTopVal() }
+  if ty == "var" { return self.parseTopVar() }
+  panic(f"expected decl, got {ty} at line {self.tokens.get(self.pos).line}")
+}
+fn pAnns(mutref p: Parser, mutref a: List<Node>) {
+  if not p.at("At") { return }
+  a.push(p.parseAnnotation())
+  pAnns(mutref p, mutref a)
+}
+
+fn Parser.parseFnDecl(mutref self, anns: List<Node>) -> Node {
+  self.expect("fn", "fn")
+  var name = self.expectIdent("fn")
+  var ext = ""
+  if self.eat("Dot") { ext = name name = self.expectIdent("fn") }
+  self.expect("LParen", "fn")
+  var params: List<Node> = []
+  if not self.at("RParen") { params.push(self.parseParam()) pParamLoop(mutref self, mutref params) }
+  self.expect("RParen", "fn")
+  if self.eat("Arrow") { self.skipType() }
+  var body: List<Node> = []
+  var bk = "block"
+  if self.eat("FatArrow") { bk = "expr" body.push(self.parseExpr()) }
+  else { body = self.parseBlock() }
+  val ep = hasAnn(anns, "entrypoint")
+  Node("FnDecl", f"{name}|{ext}|{bk}", 0, 0.0, ep, params, body)
+}
+fn hasAnn(anns: List<Node>, n: String) -> Bool {
+  var f = false
+  for a in anns { if a.sval == n { f = true } }
+  f
+}
+fn pParamLoop(mutref p: Parser, mutref ps: List<Node>) {
+  if not p.eat("Comma") { return }
+  ps.push(p.parseParam())
+  pParamLoop(mutref p, mutref ps)
+}
+fn Parser.parseParam(mutref self) -> Node {
+  var c = ""
+  if self.peekTy() == "ref" { c = "ref" self.advance() }
+  else if self.peekTy() == "mutref" { c = "mutref" self.advance() }
+  else if self.peekTy() == "owned" { c = "owned" self.advance() }
+  val name = self.expectIdent("param")
+  if self.eat("Colon") { self.skipType() }
+  ndS("Param", f"{c}|{name}")
+}
+fn Parser.skipType(mutref self) -> String {
+  if self.at("LParen") { self.advance() self.expect("RParen", "()") return "Unit" }
+  if self.at("Int") { self.advance() return "Int" }
+  val name = self.expectIdent("type")
+  if self.eat("Lt") { skipTyInner(mutref self, 1) }
+  if self.eat("Pipe") { self.skipType() }
+  name
+}
+fn skipTyInner(mutref p: Parser, d: Int) {
+  if d <= 0 { return }
+  if p.peekTy() == "Lt" { p.advance() skipTyInner(mutref p, d + 1) return }
+  if p.peekTy() == "Gt" { p.advance() skipTyInner(mutref p, d - 1) return }
+  p.advance()
+  skipTyInner(mutref p, d)
+}
+
+fn Parser.parseEnumDecl(mutref self) -> Node {
+  self.expect("enum", "enum")
+  val name = self.expectIdent("enum")
+  self.expect("LBrace", "enum")
+  var vs: List<Node> = []
+  pEnumVars(mutref self, mutref vs)
+  self.expect("RBrace", "enum")
+  ndSC("EnumDecl", name, vs)
+}
+fn pEnumVars(mutref p: Parser, mutref vs: List<Node>) {
+  if p.at("RBrace") { return }
+  val vn = p.expectIdent("variant")
+  var fs: List<Node> = []
+  if p.eat("LParen") {
+    if not p.at("RParen") { fs.push(ndS("T", p.skipType())) pEnumFs(mutref p, mutref fs) }
+    p.expect("RParen", "variant")
+  }
+  p.eat("Comma")
+  vs.push(ndSC("Variant", vn, fs))
+  pEnumVars(mutref p, mutref vs)
+}
+fn pEnumFs(mutref p: Parser, mutref fs: List<Node>) {
+  if not p.eat("Comma") { return }
+  fs.push(ndS("T", p.skipType()))
+  pEnumFs(mutref p, mutref fs)
+}
+
+fn Parser.parseStructDecl(mutref self) -> Node {
+  self.expect("struct", "struct")
+  val name = self.expectIdent("struct")
+  self.expect("LBrace", "struct")
+  var fields: List<Node> = []
+  var methods: List<Node> = []
+  pStructBody(mutref self, mutref fields, mutref methods)
+  self.expect("RBrace", "struct")
+  ndSI("StructDecl", name, fields, methods)
+}
+fn pStructBody(mutref p: Parser, mutref fs: List<Node>, mutref ms: List<Node>) {
+  if p.at("RBrace") { return }
+  if p.at("fn") { var ea: List<Node> = [] ms.push(p.parseFnDecl(ea)) }
+  else if p.at("val") or p.at("var") {
+    val m = p.at("var")
+    p.advance()
+    val n = p.expectIdent("field")
+    p.expect("Colon", "field")
+    p.skipType()
+    val ms2 = when { m => "var" else => "val" }
+    fs.push(ndS("Field", f"{ms2}|{n}"))
+  }
+  pStructBody(mutref p, mutref fs, mutref ms)
+}
+
+fn Parser.parseDataClassDecl(mutref self) -> Node {
+  self.advance() // data
+  self.expect("class", "dc")
+  val name = self.expectIdent("dc")
+  self.expect("LParen", "dc")
+  var fields: List<Node> = []
+  if not self.at("RParen") { pDcField(mutref self, mutref fields) pDcFieldLoop(mutref self, mutref fields) }
+  self.expect("RParen", "dc")
+  var methods: List<Node> = []
+  if self.at("LBrace") { self.advance() pDcMethods(mutref self, mutref methods) self.expect("RBrace", "dc") }
+  ndSI("DataClassDecl", name, fields, methods)
+}
+fn pDcField(mutref p: Parser, mutref fs: List<Node>) {
+  val m = p.at("var")
+  if p.at("val") or p.at("var") { p.advance() }
+  val n = p.expectIdent("dc field")
+  p.expect("Colon", "dc field")
+  p.skipType()
+  val ms = when { m => "var" else => "val" }
+  fs.push(ndS("Field", f"{ms}|{n}"))
+}
+fn pDcFieldLoop(mutref p: Parser, mutref fs: List<Node>) {
+  if not p.eat("Comma") { return }
+  pDcField(mutref p, mutref fs)
+  pDcFieldLoop(mutref p, mutref fs)
+}
+fn pDcMethods(mutref p: Parser, mutref ms: List<Node>) {
+  if p.at("RBrace") { return }
+  var ea: List<Node> = []
+  ms.push(p.parseFnDecl(ea))
+  pDcMethods(mutref p, mutref ms)
+}
+
+fn Parser.parseTopVal(mutref self) -> Node {
+  self.expect("val", "val")
+  if self.peekTy() == "ref" or self.peekTy() == "mutref" { self.advance() }
+  val name = self.expectIdent("val")
+  if self.eat("Colon") { self.skipType() }
+  self.expect("Eq", "val")
+  ndSC("TopVal", name, [self.parseExpr()])
+}
+fn Parser.parseTopVar(mutref self) -> Node {
+  self.expect("var", "var")
+  val name = self.expectIdent("var")
+  if self.eat("Colon") { self.skipType() }
+  self.expect("Eq", "var")
+  ndSC("TopVar", name, [self.parseExpr()])
+}
+
+// ── Blocks / Stmts ──
+
+fn Parser.parseBlock(mutref self) -> List<Node> {
+  self.expect("LBrace", "block")
+  var stmts: List<Node> = []
+  pBlockLoop(mutref self, mutref stmts)
+  self.expect("RBrace", "block")
+  stmts
+}
+fn pBlockLoop(mutref p: Parser, mutref ss: List<Node>) {
+  if p.at("RBrace") { return }
+  ss.push(p.parseStmt())
+  pBlockLoop(mutref p, mutref ss)
+}
+
+fn Parser.parseStmt(mutref self) -> Node {
+  val ty = self.peekTy()
+  if ty == "val" { return self.parseValStmt() }
+  if ty == "var" { return self.parseVarStmt() }
+  if ty == "return" { self.advance() if self.at("RBrace") or self.atEof() { return ndC("Return", []) } return ndC("Return", [self.parseExpr()]) }
+  if ty == "if" { return self.parseIfStmt() }
+  if ty == "for" { return self.parseForStmt() }
+  if ty == "defer" { self.advance() return ndC("Defer", [self.parseExpr()]) }
+  val e = self.parseExpr()
+  if self.eat("Eq") { return ndC("Assign", [e, self.parseExpr()]) }
+  ndC("ExprStmt", [e])
+}
+
+fn Parser.parseValStmt(mutref self) -> Node {
+  self.expect("val", "val")
+  if self.at("LParen") {
+    self.advance()
+    var ns: List<Node> = []
+    ns.push(ndS("N", self.expectIdent("vt")))
+    pVtNames(mutref self, mutref ns)
+    self.expect("RParen", "vt")
+    self.expect("Eq", "vt")
+    return ndC("ValTuple", [self.parseExpr(), ndC("Names", ns)])
+  }
+  if self.peekTy() == "ref" or self.peekTy() == "mutref" { self.advance() }
+  val name = self.expectIdent("val")
+  if self.eat("Colon") { self.skipType() }
+  self.expect("Eq", "val")
+  ndSC("Val", name, [self.parseExpr()])
+}
+fn pVtNames(mutref p: Parser, mutref ns: List<Node>) {
+  if not p.eat("Comma") { return }
+  ns.push(ndS("N", p.expectIdent("vt")))
+  pVtNames(mutref p, mutref ns)
+}
+
+fn Parser.parseVarStmt(mutref self) -> Node {
+  self.expect("var", "var")
+  val name = self.expectIdent("var")
+  if self.eat("Colon") { self.skipType() }
+  self.expect("Eq", "var")
+  ndSC("Var", name, [self.parseExpr()])
+}
+
+fn Parser.parseIfStmt(mutref self) -> Node {
+  self.advance()
+  val saved = self.allowBrace
+  self.allowBrace = false
+  val cond = self.parseExpr()
+  self.allowBrace = saved
+  val thenB = self.parseBlock()
+  var elseB: List<Node> = []
+  if self.eat("else") {
+    if self.at("if") { elseB.push(self.parseIfStmt()) }
+    else { elseB = self.parseBlock() }
+  }
+  ndC("If", [cond, ndC("Then", thenB), ndC("Else", elseB)])
+}
+
+fn Parser.parseForStmt(mutref self) -> Node {
+  self.advance()
+  val v = self.expectIdent("for")
+  self.expect("in", "for")
+  val saved = self.allowBrace
+  self.allowBrace = false
+  val iter = self.parseExpr()
+  self.allowBrace = saved
+  ndSC("For", v, [iter, ndC("Body", self.parseBlock())])
+}
+
+// ── Expressions ──
+
+fn Parser.parseExpr(mutref self) -> Node { self.parseElvis() }
+fn Parser.parseElvis(mutref self) -> Node {
+  val l = self.parseOr()
+  if self.eat("Elvis") { return ndC("Elvis", [l, self.parseOr()]) }
+  l
+}
+fn Parser.parseOr(mutref self) -> Node {
+  var l = self.parseAnd()
+  pOrLoop(mutref self, mutref l)
+  l
+}
+fn pOrLoop(mutref p: Parser, mutref l: Node) {
+  if not p.eat("or") { return }
+  l = ndSC("BinOp", "or", [l, p.parseAnd()])
+  pOrLoop(mutref p, mutref l)
+}
+fn Parser.parseAnd(mutref self) -> Node {
+  var l = self.parseNot()
+  pAndLoop(mutref self, mutref l)
+  l
+}
+fn pAndLoop(mutref p: Parser, mutref l: Node) {
+  if not p.eat("and") { return }
+  l = ndSC("BinOp", "and", [l, p.parseNot()])
+  pAndLoop(mutref p, mutref l)
+}
+fn Parser.parseNot(mutref self) -> Node {
+  if self.eat("not") { return ndC("UnaryNot", [self.parseNot()]) }
+  self.parseCmp()
+}
+fn Parser.parseCmp(mutref self) -> Node {
+  val l = self.parseAdd()
+  val ty = self.peekTy()
+  if ty == "EqEq" { self.advance() return ndSC("BinOp", "==", [l, self.parseAdd()]) }
+  if ty == "BangEq" { self.advance() return ndSC("BinOp", "!=", [l, self.parseAdd()]) }
+  if ty == "Lt" { self.advance() return ndSC("BinOp", "<", [l, self.parseAdd()]) }
+  if ty == "Gt" { self.advance() return ndSC("BinOp", ">", [l, self.parseAdd()]) }
+  if ty == "LtEq" { self.advance() return ndSC("BinOp", "<=", [l, self.parseAdd()]) }
+  if ty == "GtEq" { self.advance() return ndSC("BinOp", ">=", [l, self.parseAdd()]) }
+  l
+}
+fn Parser.parseAdd(mutref self) -> Node {
+  var l = self.parseMul()
+  pAddLoop(mutref self, mutref l)
+  l
+}
+fn pAddLoop(mutref p: Parser, mutref l: Node) {
+  if p.eat("Plus") { l = ndSC("BinOp", "+", [l, p.parseMul()]) pAddLoop(mutref p, mutref l) }
+  else if p.eat("Minus") { l = ndSC("BinOp", "-", [l, p.parseMul()]) pAddLoop(mutref p, mutref l) }
+}
+fn Parser.parseMul(mutref self) -> Node {
+  var l = self.parseUnary()
+  pMulLoop(mutref self, mutref l)
+  l
+}
+fn pMulLoop(mutref p: Parser, mutref l: Node) {
+  if p.eat("Star") { l = ndSC("BinOp", "*", [l, p.parseUnary()]) pMulLoop(mutref p, mutref l) }
+  else if p.eat("Slash") { l = ndSC("BinOp", "/", [l, p.parseUnary()]) pMulLoop(mutref p, mutref l) }
+  else if p.eat("Percent") { l = ndSC("BinOp", "%", [l, p.parseUnary()]) pMulLoop(mutref p, mutref l) }
+}
+fn Parser.parseUnary(mutref self) -> Node {
+  if self.eat("Minus") { return ndC("Neg", [self.parseUnary()]) }
+  if self.eat("move") { return ndC("Move", [self.parseUnary()]) }
+  if self.eat("ref") { return ndC("Ref", [self.parseUnary()]) }
+  if self.eat("mutref") { return ndC("Mutref", [self.parseUnary()]) }
+  self.parsePostfix()
+}
+fn Parser.parsePostfix(mutref self) -> Node {
+  var e = self.parsePrimary()
+  pPostLoop(mutref self, mutref e)
+  e
+}
+fn pPostLoop(mutref p: Parser, mutref e: Node) {
+  if p.eat("Dot") { e = ndSC("Field", p.expectIdent("field"), [e]) pPostLoop(mutref p, mutref e) return }
+  if p.eat("QuestionDot") { e = ndSC("OptChain", p.expectIdent("?."), [e]) pPostLoop(mutref p, mutref e) return }
+  if p.at("Question") { p.advance() e = ndC("Question", [e]) pPostLoop(mutref p, mutref e) return }
+  if p.at("LParen") { e = p.parseCall(e) pPostLoop(mutref p, mutref e) return }
+  if p.at("LBrace") and p.allowBrace and p.isLambda() { e = ndC("Call", [e, p.parseLambda()]) pPostLoop(mutref p, mutref e) return }
+}
+
+fn Parser.parseCall(mutref self, callee: Node) -> Node {
+  self.expect("LParen", "call")
+  var args: List<Node> = [callee]
+  if not self.at("RParen") { args.push(self.parseExpr()) pCallArgs(mutref self, mutref args) }
+  self.expect("RParen", "call")
+  if self.at("LBrace") and self.allowBrace and self.isLambda() { args.push(self.parseLambda()) }
+  ndC("Call", args)
+}
+fn pCallArgs(mutref p: Parser, mutref a: List<Node>) {
+  if not p.eat("Comma") { return }
+  a.push(p.parseExpr())
+  pCallArgs(mutref p, mutref a)
+}
+
+fn Parser.parsePrimary(mutref self) -> Node {
+  val ty = self.peekTy()
+  if ty == "Int" { val t = self.advance() return ndI("IntLit", t.ival) }
+  if ty == "Float" { val t = self.advance() return ndF("FloatLit", t.fval) }
+  if ty == "Str" { val t = self.advance() return ndS("StrLit", t.sval) }
+  if ty == "Bool" { val t = self.advance() return ndB("BoolLit", t.sval == "true") }
+  if ty == "self" { self.advance() return nd("SelfExpr") }
+  if ty == "Ident" { val t = self.advance() return ndS("Ident", t.sval) }
+  if ty == "FString" { val t = self.advance() return ndS("FString", t.sval) }
+  if ty == "LParen" {
+    self.advance()
+    if self.at("RParen") { self.advance() return nd("Unit") }
+    val first = self.parseExpr()
+    if self.eat("Comma") {
+      var es: List<Node> = [first]
+      if not self.at("RParen") { es.push(self.parseExpr()) pTupleLoop(mutref self, mutref es) }
+      self.expect("RParen", "tuple")
+      return ndC("Tuple", es)
+    }
+    self.expect("RParen", "paren")
+    return first
+  }
+  if ty == "LBracket" { return self.parseListLit() }
+  if ty == "match" { return self.parseMatchExpr() }
+  if ty == "when" { return self.parseWhenExpr() }
+  if ty == "LBrace" { return ndC("Block", self.parseBlock()) }
+  panic(f"expected expr, got {ty} at line {self.tokens.get(self.pos).line}")
+}
+fn pTupleLoop(mutref p: Parser, mutref es: List<Node>) {
+  if not p.eat("Comma") { return }
+  es.push(p.parseExpr())
+  pTupleLoop(mutref p, mutref es)
+}
+
+fn Parser.parseListLit(mutref self) -> Node {
+  self.expect("LBracket", "list")
+  var es: List<Node> = []
+  if not self.at("RBracket") { es.push(self.parseExpr()) pListLoop(mutref self, mutref es) }
+  self.expect("RBracket", "list")
+  ndC("ListLit", es)
+}
+fn pListLoop(mutref p: Parser, mutref es: List<Node>) {
+  if not p.eat("Comma") { return }
+  if p.at("RBracket") { return }
+  es.push(p.parseExpr())
+  pListLoop(mutref p, mutref es)
+}
+
+fn Parser.parseMatchExpr(mutref self) -> Node {
+  self.advance()
+  val saved = self.allowBrace
+  self.allowBrace = false
+  val subj = self.parseExpr()
+  self.allowBrace = saved
+  self.expect("LBrace", "match")
+  var arms: List<Node> = [subj]
+  pMatchArms(mutref self, mutref arms)
+  self.expect("RBrace", "match")
+  ndC("Match", arms)
+}
+fn pMatchArms(mutref p: Parser, mutref a: List<Node>) {
+  if p.at("RBrace") { return }
+  val pat = p.parsePattern()
+  p.expect("FatArrow", "match arm")
+  a.push(ndC("Arm", [pat, p.parseExpr()]))
+  pMatchArms(mutref p, mutref a)
+}
+
+fn Parser.parsePattern(mutref self) -> Node {
+  val ty = self.peekTy()
+  if ty == "Ident" {
+    val n = self.tokens.get(self.pos).sval
+    if n == "_" { self.advance() return nd("PW") }
+    self.advance()
+    var fn_ = n
+    pDotName(mutref self, mutref fn_)
+    if self.eat("LParen") {
+      var args: List<Node> = []
+      if not self.at("RParen") { args.push(self.parsePattern()) pPatArgs(mutref self, mutref args) }
+      self.expect("RParen", "ctor pat")
+      return ndSC("PC", fn_, args)
+    }
+    return ndS("PI", fn_)
+  }
+  if ty == "Int" { val t = self.advance() return ndI("PN", t.ival) }
+  if ty == "Str" { val t = self.advance() return ndS("PS", t.sval) }
+  if ty == "Bool" { val t = self.advance() return ndB("PB", t.sval == "true") }
+  if ty == "Float" { val t = self.advance() return ndF("PF", t.fval) }
+  if ty == "LParen" {
+    self.advance()
+    var es: List<Node> = []
+    if not self.at("RParen") { es.push(self.parsePattern()) pPatTuple(mutref self, mutref es) }
+    self.expect("RParen", "pat tuple")
+    return ndC("PT", es)
+  }
+  panic(f"expected pattern, got {ty}")
+}
+fn pDotName(mutref p: Parser, mutref n: String) {
+  if not p.eat("Dot") { return }
+  n = n + "." + p.expectIdent("dot")
+  pDotName(mutref p, mutref n)
+}
+fn pPatArgs(mutref p: Parser, mutref a: List<Node>) {
+  if not p.eat("Comma") { return }
+  a.push(p.parsePattern())
+  pPatArgs(mutref p, mutref a)
+}
+fn pPatTuple(mutref p: Parser, mutref es: List<Node>) {
+  if not p.eat("Comma") { return }
+  es.push(p.parsePattern())
+  pPatTuple(mutref p, mutref es)
+}
+
+fn Parser.parseWhenExpr(mutref self) -> Node {
+  self.advance()
+  self.expect("LBrace", "when")
+  var arms: List<Node> = []
+  pWhenArms(mutref self, mutref arms)
+  self.expect("RBrace", "when")
+  ndC("When", arms)
+}
+fn pWhenArms(mutref p: Parser, mutref a: List<Node>) {
+  if p.at("RBrace") { return }
+  if p.eat("else") {
+    p.expect("FatArrow", "when else")
+    a.push(ndC("WE", [p.parseExpr()]))
+  } else {
+    val saved = p.allowBrace
+    p.allowBrace = false
+    val cond = p.parseExpr()
+    p.allowBrace = saved
+    p.expect("FatArrow", "when arm")
+    a.push(ndC("WA", [cond, p.parseExpr()]))
+  }
+  pWhenArms(mutref p, mutref a)
+}
+
+// ── Lambda ──
+
+fn Parser.isLambda(ref self) -> Bool {
+  var i = self.pos
+  if self.tokens.get(i).ty != "LBrace" { return false }
+  i = i + 1
+  if self.tokens.get(i).ty != "Ident" { return false }
+  i = i + 1
+  isLamLoop(self.tokens, mutref i)
+  self.tokens.get(i).ty == "FatArrow"
+}
+fn isLamLoop(toks: List<Token>, mutref i: Int) {
+  if toks.get(i).ty != "Comma" { return }
+  i = i + 1
+  if toks.get(i).ty != "Ident" { return }
+  i = i + 1
+  isLamLoop(toks, mutref i)
+}
+fn Parser.parseLambda(mutref self) -> Node {
+  self.expect("LBrace", "lam")
+  var ps: List<Node> = []
+  ps.push(ndS("P", self.expectIdent("lam")))
+  pLamPs(mutref self, mutref ps)
+  self.expect("FatArrow", "lam")
+  var body: List<Node> = []
+  pLamBody(mutref self, mutref body)
+  self.expect("RBrace", "lam")
+  ndC("Lambda", [ndC("Ps", ps), ndC("Bd", body)])
+}
+fn pLamPs(mutref p: Parser, mutref ps: List<Node>) {
+  if not p.eat("Comma") { return }
+  ps.push(ndS("P", p.expectIdent("lam")))
+  pLamPs(mutref p, mutref ps)
+}
+fn pLamBody(mutref p: Parser, mutref b: List<Node>) {
+  if p.at("RBrace") { return }
+  b.push(p.parseStmt())
+  pLamBody(mutref p, mutref b)
+}
+
+
+// =============================================================================
+// Section 5: Runtime Values
+// =============================================================================
+
+data class Val(val ty: String, val sval: String, val ival: Int, val fval: Float, val bval: Bool, val list: List<Val>, val fields: List<Val>)
+
+fn vU() -> Val { Val("U", "", 0, 0.0, false, [], []) }
+fn vI(i: Int) -> Val { Val("I", "", i, 0.0, false, [], []) }
+fn vF(f: Float) -> Val { Val("F", "", 0, f, false, [], []) }
+fn vB(b: Bool) -> Val { Val("B", "", 0, 0.0, b, [], []) }
+fn vS(s: String) -> Val { Val("S", s, 0, 0.0, false, [], []) }
+fn vL(es: List<Val>) -> Val { Val("L", "", 0, 0.0, false, es, []) }
+fn vFP(n: String, v: Val) -> Val { Val("FP", n, 0, 0.0, false, [], [v]) }
+fn vSt(tn: String, fps: List<Val>) -> Val { Val("St", tn, 0, 0.0, false, [], fps) }
+fn vEn(en: String, vn: String, v: Val) -> Val {
+  val tag = f"{en}.{vn}"
+  if v.ty == "NV" { Val("En", tag, 0, 0.0, false, [], []) }
+  else { Val("En", tag, 0, 0.0, false, [], [v]) }
+}
+fn vNV() -> Val { Val("NV", "", 0, 0.0, false, [], []) }
+fn vNone() -> Val { vEn("Option", "None", vNV()) }
+fn vSome(v: Val) -> Val { vEn("Option", "Some", v) }
+fn vOk(v: Val) -> Val { vEn("Result", "Ok", v) }
+fn vErr(v: Val) -> Val { vEn("Result", "Err", v) }
+fn vLam(id: Int, caps: List<Val>) -> Val { Val("Lam", "", id, 0.0, false, [], caps) }
+fn vFn(n: String) -> Val { Val("Fn", n, 0, 0.0, false, [], []) }
+
+fn isOk(v: Val) -> Bool { v.ty == "En" and v.sval == "Result.Ok" }
+fn isErr(v: Val) -> Bool { v.ty == "En" and v.sval == "Result.Err" }
+fn isSome(v: Val) -> Bool { v.ty == "En" and v.sval == "Option.Some" }
+fn isNone(v: Val) -> Bool { v.ty == "En" and v.sval == "Option.None" }
+fn unwrapEn(v: Val) -> Val { if v.fields.len() > 0 { return v.fields.get(0) } vU() }
+fn isTruthy(v: Val) -> Bool {
+  if v.ty == "B" { return v.bval }
+  if v.ty == "I" { return v.ival != 0 }
+  if v.ty == "U" { return false }
+  if isNone(v) { return false }
+  true
+}
+fn isRet(v: Val) -> Bool { v.ty == "Ret" }
+fn mkRet(v: Val) -> Val { Val("Ret", "", 0, 0.0, false, [], [v]) }
+fn unwrapRet(v: Val) -> Val { if v.fields.len() > 0 { return v.fields.get(0) } vU() }
+
+fn v2s(v: Val) -> String {
+  if v.ty == "I" { return v.ival.toString() }
+  if v.ty == "F" { return v.fval.toString() }
+  if v.ty == "B" { if v.bval { return "true" } return "false" }
+  if v.ty == "S" { return v.sval }
+  if v.ty == "U" { return "()" }
+  if v.ty == "L" {
+    var s = "["
+    var i = 0
+    for e in v.list { if i > 0 { s = s + ", " } s = s + v2s(e) i = i + 1 }
+    return s + "]"
+  }
+  if v.ty == "St" {
+    var s = v.sval + "("
+    var i = 0
+    for fp in v.fields { if i > 0 { s = s + ", " } s = s + v2s(fp.fields.get(0)) i = i + 1 }
+    return s + ")"
+  }
+  if v.ty == "En" {
+    val ps = v.sval.split(".")
+    var vn = v.sval
+    if ps.len() > 1 { vn = ps.get(1) }
+    if v.fields.len() > 0 { return f"{vn}({v2s(v.fields.get(0))})" }
+    return vn
+  }
+  if v.ty == "Lam" { return "<lambda>" }
+  if v.ty == "Fn" { return f"<fn {v.sval}>" }
+  "()"
+}
+
+fn vEq(a: Val, b: Val) -> Bool {
+  if a.ty != b.ty { return false }
+  if a.ty == "I" { return a.ival == b.ival }
+  if a.ty == "F" { return a.fval == b.fval }
+  if a.ty == "B" { return a.bval == b.bval }
+  if a.ty == "S" { return a.sval == b.sval }
+  if a.ty == "U" { return true }
+  if a.ty == "En" {
+    if a.sval != b.sval { return false }
+    if a.fields.len() == 0 and b.fields.len() == 0 { return true }
+    if a.fields.len() > 0 and b.fields.len() > 0 { return vEq(a.fields.get(0), b.fields.get(0)) }
+    return false
+  }
+  if a.ty == "St" {
+    if a.sval != b.sval { return false }
+    if a.fields.len() != b.fields.len() { return false }
+    return stEq(a.fields, b.fields, 0)
+  }
+  false
+}
+fn stEq(af: List<Val>, bf: List<Val>, i: Int) -> Bool {
+  if i >= af.len() { return true }
+  if not vEq(af.get(i).fields.get(0), bf.get(i).fields.get(0)) { return false }
+  stEq(af, bf, i + 1)
+}
+
+
+// =============================================================================
+// Section 6: Environment
+// =============================================================================
+
+fn newEnv() -> List<Val> { [Val("Sc", "", 0, 0.0, false, [], [])] }
+
+fn envPush(mutref env: List<Val>) { env.push(Val("Sc", "", 0, 0.0, false, [], [])) }
+fn envPop(mutref env: List<Val>) { if env.len() > 1 { env.set(env.len() - 1, Val("X", "", 0, 0.0, false, [], [])) } }
+
+fn envDef(mutref env: List<Val>, name: String, value: Val) {
+  val idx = findSc(env, env.len() - 1)
+  if idx >= 0 {
+    val sc = env.get(idx)
+    var nf: List<Val> = []
+    for f in sc.fields { nf.push(f) }
+    nf.push(Val("Bd", name, 0, 0.0, false, [], [value]))
+    env.set(idx, Val("Sc", "", 0, 0.0, false, [], nf))
+  }
+}
+fn findSc(env: List<Val>, i: Int) -> Int {
+  if i < 0 { return -1 }
+  if env.get(i).ty == "Sc" { return i }
+  findSc(env, i - 1)
+}
+
+fn envGet(env: List<Val>, name: String) -> Val { envGetAt(env, name, env.len() - 1) }
+fn envGetAt(env: List<Val>, name: String, i: Int) -> Val {
+  if i < 0 { return Val("NF", "", 0, 0.0, false, [], []) }
+  val sc = env.get(i)
+  if sc.ty == "Sc" {
+    val r = scFind(sc.fields, name, sc.fields.len() - 1)
+    if r.ty != "NF" { return r }
+  }
+  envGetAt(env, name, i - 1)
+}
+fn scFind(bs: List<Val>, name: String, j: Int) -> Val {
+  if j < 0 { return Val("NF", "", 0, 0.0, false, [], []) }
+  val b = bs.get(j)
+  if b.sval == name { return b.fields.get(0) }
+  scFind(bs, name, j - 1)
+}
+
+fn envSet(mutref env: List<Val>, name: String, value: Val) -> Bool { envSetAt(mutref env, name, value, env.len() - 1) }
+fn envSetAt(mutref env: List<Val>, name: String, value: Val, i: Int) -> Bool {
+  if i < 0 { return false }
+  val sc = env.get(i)
+  if sc.ty == "Sc" {
+    val idx = scFindIdx(sc.fields, name, sc.fields.len() - 1)
+    if idx >= 0 {
+      val nb = Val("Bd", name, 0, 0.0, false, [], [value])
+      var nf: List<Val> = []
+      rebuildFs(sc.fields, idx, nb, mutref nf, 0)
+      env.set(i, Val("Sc", "", 0, 0.0, false, [], nf))
+      return true
+    }
+  }
+  envSetAt(mutref env, name, value, i - 1)
+}
+fn scFindIdx(bs: List<Val>, name: String, j: Int) -> Int {
+  if j < 0 { return -1 }
+  if bs.get(j).sval == name { return j }
+  scFindIdx(bs, name, j - 1)
+}
+fn rebuildFs(src: List<Val>, ri: Int, rep: Val, mutref dst: List<Val>, k: Int) {
+  if k >= src.len() { return }
+  if k == ri { dst.push(rep) } else { dst.push(src.get(k)) }
+  rebuildFs(src, ri, rep, mutref dst, k + 1)
+}
+fn envSnap(env: List<Val>) -> List<Val> {
+  var r: List<Val> = []
+  envSnapLoop(env, mutref r, 0)
+  r
+}
+fn envSnapLoop(env: List<Val>, mutref r: List<Val>, i: Int) {
+  if i >= env.len() { return }
+  val sc = env.get(i)
+  if sc.ty == "Sc" { for b in sc.fields { r.push(vFP(b.sval, b.fields.get(0))) } }
+  envSnapLoop(env, mutref r, i + 1)
+}
+
+
+// =============================================================================
+// Section 7: Evaluator
+// =============================================================================
+
+data class Interp(val fns: List<Node>, val enums: List<Node>, val structs: List<Node>, val dcs: List<Node>, val extFns: List<Node>, var globals: List<Val>, var lambdas: List<Node>, var lamCt: Int)
+
+fn newInterp(prog: Node) -> Interp {
+  var fns: List<Node> = []
+  var enums: List<Node> = []
+  var structs: List<Node> = []
+  var dcs: List<Node> = []
+  var extFns: List<Node> = []
+  for d in prog.children {
+    if d.kind == "FnDecl" { val info = d.sval.split("|") if info.get(1) != "" { extFns.push(d) } else { fns.push(d) } }
+    else if d.kind == "EnumDecl" { enums.push(d) }
+    else if d.kind == "StructDecl" { structs.push(d) }
+    else if d.kind == "DataClassDecl" { dcs.push(d) }
+  }
+  Interp(fns, enums, structs, dcs, extFns, [], [], 0)
+}
+
+fn findFn(ip: Interp, name: String) -> Node { findFnL(ip.fns, name, 0) }
+fn findFnL(fs: List<Node>, name: String, i: Int) -> Node {
+  if i >= fs.len() { return nd("NF") }
+  if fs.get(i).sval.split("|").get(0) == name { return fs.get(i) }
+  findFnL(fs, name, i + 1)
+}
+fn findExtFn(ip: Interp, tn: String, mn: String) -> Node { findExtL(ip.extFns, tn, mn, 0) }
+fn findExtL(fs: List<Node>, tn: String, mn: String, i: Int) -> Node {
+  if i >= fs.len() { return nd("NF") }
+  val info = fs.get(i).sval.split("|")
+  if info.get(0) == mn and info.get(1) == tn { return fs.get(i) }
+  findExtL(fs, tn, mn, i + 1)
+}
+fn findEnum(ip: Interp, n: String) -> Node { findEnL(ip.enums, n, 0) }
+fn findEnL(es: List<Node>, n: String, i: Int) -> Node {
+  if i >= es.len() { return nd("NF") }
+  if es.get(i).sval == n { return es.get(i) }
+  findEnL(es, n, i + 1)
+}
+fn findStruct(ip: Interp, n: String) -> Node { findStL(ip.structs, n, 0) }
+fn findStL(ss: List<Node>, n: String, i: Int) -> Node {
+  if i >= ss.len() { return nd("NF") }
+  if ss.get(i).sval == n { return ss.get(i) }
+  findStL(ss, n, i + 1)
+}
+fn findDC(ip: Interp, n: String) -> Node { findDCL(ip.dcs, n, 0) }
+fn findDCL(ds: List<Node>, n: String, i: Int) -> Node {
+  if i >= ds.len() { return nd("NF") }
+  if ds.get(i).sval == n { return ds.get(i) }
+  findDCL(ds, n, i + 1)
+}
+fn getFieldNames(d: Node) -> List<String> {
+  var ns: List<String> = []
+  for f in d.children { if f.kind == "Field" { ns.push(f.sval.split("|").get(1)) } }
+  ns
+}
+fn findMethod(ip: Interp, tn: String, mn: String) -> Node {
+  val s = findStruct(ip, tn)
+  if s.kind != "NF" { val r = findML(s.items, mn, 0) if r.kind != "NF" { return r } }
+  val dc = findDC(ip, tn)
+  if dc.kind != "NF" { val r = findML(dc.items, mn, 0) if r.kind != "NF" { return r } }
+  nd("NF")
+}
+fn findML(ms: List<Node>, mn: String, i: Int) -> Node {
+  if i >= ms.len() { return nd("NF") }
+  if ms.get(i).sval.split("|").get(0) == mn { return ms.get(i) }
+  findML(ms, mn, i + 1)
+}
+fn regLam(mutref ip: Interp, ps: List<Node>, bd: List<Node>) -> Int {
+  val id = ip.lamCt
+  ip.lamCt = id + 1
+  ip.lambdas.push(ndC("LS", [ndC("Ps", ps), ndC("Bd", bd)]))
+  id
+}
+fn getLam(ip: Interp, id: Int) -> Node {
+  if id < ip.lambdas.len() { return ip.lambdas.get(id) }
+  nd("NF")
+}
+
+// ── Run ──
+fn runProg(mutref ip: Interp, prog: Node) {
+  for d in prog.children {
+    if d.kind == "TopVal" or d.kind == "TopVar" {
+      var env = newEnv()
+      loadGlobs(ip.globals, mutref env, 0)
+      val v = evalExpr(mutref ip, mutref env, d.children.get(0))
+      ip.globals.push(vFP(d.sval, v))
+    }
+  }
+  var entry = nd("NF")
+  for f in ip.fns { if f.bval { entry = f } }
+  if entry.kind == "NF" { panic("no @entrypoint") }
+  val r = callFn(mutref ip, entry, [], vU())
+  if isErr(r) { eprintln(f"Error: {v2s(unwrapEn(r))}") exit(1) }
+}
+fn loadGlobs(gs: List<Val>, mutref env: List<Val>, i: Int) {
+  if i >= gs.len() { return }
+  val g = gs.get(i)
+  envDef(mutref env, g.sval, g.fields.get(0))
+  loadGlobs(gs, mutref env, i + 1)
+}
+
+// ── Call ──
+fn callFn(mutref ip: Interp, decl: Node, args: List<Val>, sv: Val) -> Val {
+  val info = decl.sval.split("|")
+  val bk = info.get(2)
+  var env = newEnv()
+  loadGlobs(ip.globals, mutref env, 0)
+  bindPs(decl.children, args, sv, mutref env, 0, 0)
+  if bk == "expr" { return evalExpr(mutref ip, mutref env, decl.items.get(0)) }
+  evalStmts(mutref ip, mutref env, decl.items)
+}
+fn bindPs(ps: List<Node>, args: List<Val>, sv: Val, mutref env: List<Val>, pi: Int, ai: Int) {
+  if pi >= ps.len() { return }
+  val pn = ps.get(pi).sval.split("|").get(1)
+  if pn == "self" { envDef(mutref env, "self", sv) bindPs(ps, args, sv, mutref env, pi + 1, ai) }
+  else {
+    var v = vU()
+    if ai < args.len() { v = args.get(ai) }
+    envDef(mutref env, pn, v)
+    bindPs(ps, args, sv, mutref env, pi + 1, ai + 1)
+  }
+}
+fn callLam(mutref ip: Interp, id: Int, caps: List<Val>, args: List<Val>) -> Val {
+  val lm = getLam(ip, id)
+  if lm.kind == "NF" { return vU() }
+  var env = newEnv()
+  restCaps(caps, mutref env, 0)
+  bindLPs(lm.children.get(0).children, args, mutref env, 0)
+  evalStmts(mutref ip, mutref env, lm.children.get(1).children)
+}
+fn restCaps(cs: List<Val>, mutref env: List<Val>, i: Int) {
+  if i >= cs.len() { return }
+  envDef(mutref env, cs.get(i).sval, cs.get(i).fields.get(0))
+  restCaps(cs, mutref env, i + 1)
+}
+fn bindLPs(ps: List<Node>, args: List<Val>, mutref env: List<Val>, i: Int) {
+  if i >= ps.len() { return }
+  var v = vU()
+  if i < args.len() { v = args.get(i) }
+  envDef(mutref env, ps.get(i).sval, v)
+  bindLPs(ps, args, mutref env, i + 1)
+}
+
+// ── Stmts ──
+fn evalStmts(mutref ip: Interp, mutref env: List<Val>, ss: List<Node>) -> Val { evalSsAt(mutref ip, mutref env, ss, 0, vU()) }
+fn evalSsAt(mutref ip: Interp, mutref env: List<Val>, ss: List<Node>, i: Int, prev: Val) -> Val {
+  if isRet(prev) { return prev }
+  if i >= ss.len() { return prev }
+  val r = evalStmt(mutref ip, mutref env, ss.get(i))
+  evalSsAt(mutref ip, mutref env, ss, i + 1, r)
+}
+
+fn evalStmt(mutref ip: Interp, mutref env: List<Val>, s: Node) -> Val {
+  if s.kind == "Val" or s.kind == "Var" {
+    val v = evalExpr(mutref ip, mutref env, s.children.get(0))
+    if isRet(v) { return v }
+    envDef(mutref env, s.sval, v)
+    return vU()
+  }
+  if s.kind == "ValTuple" {
+    val v = evalExpr(mutref ip, mutref env, s.children.get(0))
+    if isRet(v) { return v }
+    if v.ty == "L" { bindTN(s.children.get(1).children, v.list, mutref env, 0) }
+    return vU()
+  }
+  if s.kind == "Assign" {
+    val tgt = s.children.get(0)
+    val v = evalExpr(mutref ip, mutref env, s.children.get(1))
+    if isRet(v) { return v }
+    if tgt.kind == "Ident" { envSet(mutref env, tgt.sval, v) }
+    else if tgt.kind == "Field" {
+      val oe = tgt.children.get(0)
+      if oe.kind == "Ident" { val obj = envGet(env, oe.sval) envSet(mutref env, oe.sval, setSF(obj, tgt.sval, v)) }
+    }
+    return vU()
+  }
+  if s.kind == "ExprStmt" { return evalExpr(mutref ip, mutref env, s.children.get(0)) }
+  if s.kind == "Return" {
+    if s.children.len() == 0 { return mkRet(vU()) }
+    val v = evalExpr(mutref ip, mutref env, s.children.get(0))
+    if isRet(v) { return v }
+    return mkRet(v)
+  }
+  if s.kind == "If" { return evalIf(mutref ip, mutref env, s) }
+  if s.kind == "For" { return evalFor(mutref ip, mutref env, s) }
+  vU()
+}
+fn bindTN(ns: List<Node>, es: List<Val>, mutref env: List<Val>, i: Int) {
+  if i >= ns.len() { return }
+  var v = vU()
+  if i < es.len() { v = es.get(i) }
+  envDef(mutref env, ns.get(i).sval, v)
+  bindTN(ns, es, mutref env, i + 1)
+}
+fn setSF(obj: Val, fn_: String, v: Val) -> Val {
+  if obj.ty != "St" { return obj }
+  var nf: List<Val> = []
+  for fp in obj.fields { if fp.sval == fn_ { nf.push(vFP(fn_, v)) } else { nf.push(fp) } }
+  vSt(obj.sval, nf)
+}
+fn evalIf(mutref ip: Interp, mutref env: List<Val>, s: Node) -> Val {
+  val c = evalExpr(mutref ip, mutref env, s.children.get(0))
+  if isRet(c) { return c }
+  if isTruthy(c) { envPush(mutref env) val r = evalStmts(mutref ip, mutref env, s.children.get(1).children) envPop(mutref env) return r }
+  val eb = s.children.get(2)
+  if eb.children.len() > 0 {
+    val fe = eb.children.get(0)
+    if fe.kind == "If" { return evalIf(mutref ip, mutref env, fe) }
+    envPush(mutref env)
+    val r = evalStmts(mutref ip, mutref env, eb.children)
+    envPop(mutref env)
+    return r
+  }
+  vU()
+}
+fn evalFor(mutref ip: Interp, mutref env: List<Val>, s: Node) -> Val {
+  val it = evalExpr(mutref ip, mutref env, s.children.get(0))
+  if isRet(it) { return it }
+  if it.ty == "L" { return evalForItems(mutref ip, mutref env, s.sval, it.list, s.children.get(1).children, 0) }
+  vU()
+}
+fn evalForItems(mutref ip: Interp, mutref env: List<Val>, vn: String, items: List<Val>, body: List<Node>, i: Int) -> Val {
+  if i >= items.len() { return vU() }
+  envPush(mutref env)
+  envDef(mutref env, vn, items.get(i))
+  val r = evalStmts(mutref ip, mutref env, body)
+  envPop(mutref env)
+  if isRet(r) { return r }
+  evalForItems(mutref ip, mutref env, vn, items, body, i + 1)
+}
+
+// ── Expr ──
+fn evalExpr(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val {
+  if e.kind == "IntLit" { return vI(e.ival) }
+  if e.kind == "FloatLit" { return vF(e.fval) }
+  if e.kind == "StrLit" { return vS(e.sval) }
+  if e.kind == "BoolLit" { return vB(e.bval) }
+  if e.kind == "Unit" { return vU() }
+  if e.kind == "Ident" {
+    val v = envGet(env, e.sval)
+    if v.ty != "NF" { return v }
+    if findEnum(ip, e.sval).kind != "NF" { return vFn(e.sval) }
+    if e.sval == "None" { return vNone() }
+    return vU()
+  }
+  if e.kind == "SelfExpr" { val v = envGet(env, "self") if v.ty != "NF" { return v } return vU() }
+  if e.kind == "BinOp" { return evalBin(mutref ip, mutref env, e) }
+  if e.kind == "Neg" { val v = evalExpr(mutref ip, mutref env, e.children.get(0)) if isRet(v) { return v } if v.ty == "I" { return vI(0 - v.ival) } if v.ty == "F" { return vF(0.0 - v.fval) } return vU() }
+  if e.kind == "UnaryNot" { val v = evalExpr(mutref ip, mutref env, e.children.get(0)) if isRet(v) { return v } return vB(not isTruthy(v)) }
+  if e.kind == "Move" or e.kind == "Ref" or e.kind == "Mutref" { return evalExpr(mutref ip, mutref env, e.children.get(0)) }
+  if e.kind == "Field" { return evalField(mutref ip, mutref env, e) }
+  if e.kind == "OptChain" { return evalOC(mutref ip, mutref env, e) }
+  if e.kind == "Question" { return evalQ(mutref ip, mutref env, e) }
+  if e.kind == "Elvis" { val lv = evalExpr(mutref ip, mutref env, e.children.get(0)) if isRet(lv) { return lv } if isNone(lv) { return evalExpr(mutref ip, mutref env, e.children.get(1)) } return lv }
+  if e.kind == "Call" { return evalCall(mutref ip, mutref env, e) }
+  if e.kind == "Match" { return evalMatch(mutref ip, mutref env, e) }
+  if e.kind == "When" { return evalWhen(mutref ip, mutref env, e) }
+  if e.kind == "FString" { return evalFS(mutref ip, mutref env, e) }
+  if e.kind == "ListLit" or e.kind == "Tuple" { var es: List<Val> = [] return evalLEs(mutref ip, mutref env, e.children, mutref es, 0) }
+  if e.kind == "Lambda" { val id = regLam(mutref ip, e.children.get(0).children, e.children.get(1).children) return vLam(id, envSnap(env)) }
+  if e.kind == "Block" { envPush(mutref env) val r = evalStmts(mutref ip, mutref env, e.children) envPop(mutref env) return r }
+  vU()
+}
+fn evalLEs(mutref ip: Interp, mutref env: List<Val>, es: List<Node>, mutref rs: List<Val>, i: Int) -> Val {
+  if i >= es.len() { return vL(rs) }
+  val v = evalExpr(mutref ip, mutref env, es.get(i))
+  if isRet(v) { return v }
+  rs.push(v)
+  evalLEs(mutref ip, mutref env, es, mutref rs, i + 1)
+}
+
+fn evalBin(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val {
+  val op = e.sval
+  val lv = evalExpr(mutref ip, mutref env, e.children.get(0))
+  if isRet(lv) { return lv }
+  if op == "and" { if not isTruthy(lv) { return vB(false) } val rv = evalExpr(mutref ip, mutref env, e.children.get(1)) if isRet(rv) { return rv } return vB(isTruthy(rv)) }
+  if op == "or" { if isTruthy(lv) { return vB(true) } val rv = evalExpr(mutref ip, mutref env, e.children.get(1)) if isRet(rv) { return rv } return vB(isTruthy(rv)) }
+  val rv = evalExpr(mutref ip, mutref env, e.children.get(1))
+  if isRet(rv) { return rv }
+  if op == "+" { if lv.ty == "I" and rv.ty == "I" { return vI(lv.ival + rv.ival) } if lv.ty == "F" and rv.ty == "F" { return vF(lv.fval + rv.fval) } if lv.ty == "S" and rv.ty == "S" { return vS(lv.sval + rv.sval) } }
+  if op == "-" { if lv.ty == "I" and rv.ty == "I" { return vI(lv.ival - rv.ival) } if lv.ty == "F" and rv.ty == "F" { return vF(lv.fval - rv.fval) } }
+  if op == "*" { if lv.ty == "I" and rv.ty == "I" { return vI(lv.ival * rv.ival) } if lv.ty == "F" and rv.ty == "F" { return vF(lv.fval * rv.fval) } }
+  if op == "/" { if lv.ty == "I" and rv.ty == "I" { return vI(lv.ival / rv.ival) } if lv.ty == "F" and rv.ty == "F" { return vF(lv.fval / rv.fval) } }
+  if op == "%" { if lv.ty == "I" and rv.ty == "I" { return vI(lv.ival % rv.ival) } }
+  if op == "==" { return vB(vEq(lv, rv)) }
+  if op == "!=" { return vB(not vEq(lv, rv)) }
+  if op == "<" { if lv.ty == "I" and rv.ty == "I" { return vB(lv.ival < rv.ival) } if lv.ty == "F" and rv.ty == "F" { return vB(lv.fval < rv.fval) } }
+  if op == ">" { if lv.ty == "I" and rv.ty == "I" { return vB(lv.ival > rv.ival) } if lv.ty == "F" and rv.ty == "F" { return vB(lv.fval > rv.fval) } }
+  if op == "<=" { if lv.ty == "I" and rv.ty == "I" { return vB(lv.ival <= rv.ival) } if lv.ty == "F" and rv.ty == "F" { return vB(lv.fval <= rv.fval) } }
+  if op == ">=" { if lv.ty == "I" and rv.ty == "I" { return vB(lv.ival >= rv.ival) } if lv.ty == "F" and rv.ty == "F" { return vB(lv.fval >= rv.fval) } }
+  vU()
+}
+
+fn evalField(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val {
+  val oe = e.children.get(0)
+  val fn_ = e.sval
+  val obj = evalExpr(mutref ip, mutref env, oe)
+  if isRet(obj) { return obj }
+  if obj.ty == "St" { val r = findFV(obj.fields, fn_, 0) if r.ty != "NF" { return r } }
+  if oe.kind == "Ident" {
+    val ed = findEnum(ip, oe.sval)
+    if ed.kind != "NF" { return findEV(ed.children, oe.sval, fn_, 0) }
+  }
+  if obj.ty == "Fn" { return vFn(f"{obj.sval}.{fn_}") }
+  panic(f"no field '{fn_}' on {obj.ty}:{obj.sval}")
+}
+fn findFV(fs: List<Val>, n: String, i: Int) -> Val {
+  if i >= fs.len() { return Val("NF", "", 0, 0.0, false, [], []) }
+  if fs.get(i).sval == n { return fs.get(i).fields.get(0) }
+  findFV(fs, n, i + 1)
+}
+fn findEV(vs: List<Node>, en: String, vn: String, i: Int) -> Val {
+  if i >= vs.len() { return vU() }
+  if vs.get(i).sval == vn {
+    if vs.get(i).children.len() == 0 { return vEn(en, vn, vNV()) }
+    return vFn(f"{en}.{vn}")
+  }
+  findEV(vs, en, vn, i + 1)
+}
+fn evalOC(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val {
+  val obj = evalExpr(mutref ip, mutref env, e.children.get(0))
+  if isRet(obj) { return obj }
+  if isNone(obj) { return vNone() }
+  var inner = obj
+  if isSome(obj) { inner = unwrapEn(obj) }
+  if inner.ty == "St" { val r = findFV(inner.fields, e.sval, 0) if r.ty != "NF" { return r } }
+  vNone()
+}
+fn evalQ(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val {
+  val v = evalExpr(mutref ip, mutref env, e.children.get(0))
+  if isRet(v) { return v }
+  if isOk(v) { return unwrapEn(v) }
+  if isErr(v) { return mkRet(v) }
+  if isSome(v) { return unwrapEn(v) }
+  if isNone(v) { return mkRet(v) }
+  v
+}
+
+fn evalCall(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val {
+  val callee = e.children.get(0)
+  if callee.kind == "Field" { return evalMC(mutref ip, mutref env, callee, e) }
+  var args: List<Val> = []
+  evalCArgs(mutref ip, mutref env, e.children, mutref args, 1)
+  if callee.kind == "Ident" {
+    val n = callee.sval
+    if n == "println" { var v = vU() if args.len() > 0 { v = args.get(0) } println(v2s(v)) return vU() }
+    if n == "eprintln" { var v = vU() if args.len() > 0 { v = args.get(0) } eprintln(v2s(v)) return vU() }
+    if n == "Some" { var v = vU() if args.len() > 0 { v = args.get(0) } return vSome(v) }
+    if n == "Ok" { var v = vU() if args.len() > 0 { v = args.get(0) } return vOk(v) }
+    if n == "Err" { var v = vU() if args.len() > 0 { v = args.get(0) } return vErr(v) }
+    if n == "readFile" { return match readFile(args.get(0).sval) { Ok(c) => vOk(vS(c)) Err(er) => vErr(vS(er)) } }
+    if n == "args" { val a = args() var r: List<Val> = [] for s in a { r.push(vS(s)) } return vL(r) }
+    if n == "exit" { var c = 0 if args.len() > 0 { c = args.get(0).ival } exit(c) }
+    if n == "fromCharCode" { return vS(fromCharCode(args.get(0).ival)) }
+    if n == "parseInt" { return match parseInt(args.get(0).sval) { Ok(v) => vOk(vI(v)) Err(_) => vErr(vS("parse error")) } }
+    if n == "parseFloat" { return match parseFloat(args.get(0).sval) { Ok(v) => vOk(vF(v)) Err(_) => vErr(vS("parse error")) } }
+    if n == "panic" { var m = "" if args.len() > 0 { m = v2s(args.get(0)) } panic(f"Fuse panic: {m}") }
+    val fd = findFn(ip, n)
+    if fd.kind == "FnDecl" { val r = callFn(mutref ip, fd, args, vU()) if isRet(r) { return mkRet(unwrapRet(r)) } return r }
+    val sd = findStruct(ip, n)
+    if sd.kind != "NF" { return conType(sd, args) }
+    val dc = findDC(ip, n)
+    if dc.kind != "NF" { return conType(dc, args) }
+  }
+  val cv = evalExpr(mutref ip, mutref env, callee)
+  if isRet(cv) { return cv }
+  if cv.ty == "Lam" { val r = callLam(mutref ip, cv.ival, cv.fields, args) if isRet(r) { return mkRet(unwrapRet(r)) } return r }
+  if cv.ty == "Fn" and cv.sval.contains(".") {
+    val ps = cv.sval.split(".")
+    var v = vNV()
+    if args.len() == 1 { v = args.get(0) }
+    return vEn(ps.get(0), ps.get(1), v)
+  }
+  vU()
+}
+fn evalCArgs(mutref ip: Interp, mutref env: List<Val>, ch: List<Node>, mutref args: List<Val>, i: Int) {
+  if i >= ch.len() { return }
+  val v = evalExpr(mutref ip, mutref env, ch.get(i))
+  if isRet(v) { args.push(unwrapRet(v)) } else { args.push(v) }
+  evalCArgs(mutref ip, mutref env, ch, mutref args, i + 1)
+}
+fn evalMC(mutref ip: Interp, mutref env: List<Val>, callee: Node, e: Node) -> Val {
+  val oe = callee.children.get(0)
+  val mn = callee.sval
+  var args: List<Val> = []
+  evalCArgs(mutref ip, mutref env, e.children, mutref args, 1)
+  if oe.kind == "Ident" { val ed = findEnum(ip, oe.sval) if ed.kind != "NF" { val r = tryEC(ed.children, oe.sval, mn, args) if r.ty != "NF" { return r } } }
+  val obj = evalExpr(mutref ip, mutref env, oe)
+  if isRet(obj) { return obj }
+  val tn = gTN(obj)
+  val ef = findExtFn(ip, tn, mn)
+  if ef.kind == "FnDecl" { val r = callFn(mutref ip, ef, args, obj) if isRet(r) { return mkRet(unwrapRet(r)) } return r }
+  if obj.ty == "St" { val mt = findMethod(ip, obj.sval, mn) if mt.kind == "FnDecl" { val r = callFn(mutref ip, mt, args, obj) if isRet(r) { return mkRet(unwrapRet(r)) } return r } }
+  if obj.ty == "L" { return evalLM(mutref ip, mutref env, obj, mn, args, oe) }
+  if obj.ty == "S" { return evalSM(obj, mn, args) }
+  if obj.ty == "I" { return evalIM(obj, mn) }
+  if obj.ty == "F" { return evalFM(obj, mn) }
+  panic(f"no method '{mn}' on {tn}")
+}
+fn tryEC(vs: List<Node>, en: String, vn: String, args: List<Val>) -> Val { tryECL(vs, en, vn, args, 0) }
+fn tryECL(vs: List<Node>, en: String, vn: String, args: List<Val>, i: Int) -> Val {
+  if i >= vs.len() { return Val("NF", "", 0, 0.0, false, [], []) }
+  if vs.get(i).sval == vn and vs.get(i).children.len() > 0 {
+    var v = vNV()
+    if args.len() == 1 { v = args.get(0) }
+    return vEn(en, vn, v)
+  }
+  tryECL(vs, en, vn, args, i + 1)
+}
+fn gTN(v: Val) -> String {
+  if v.ty == "St" { return v.sval }
+  if v.ty == "En" { return v.sval.split(".").get(0) }
+  if v.ty == "I" { return "Int" }
+  if v.ty == "F" { return "Float" }
+  if v.ty == "B" { return "Bool" }
+  if v.ty == "S" { return "String" }
+  if v.ty == "L" { return "List" }
+  v.ty
+}
+fn conType(d: Node, args: List<Val>) -> Val {
+  val ns = getFieldNames(d)
+  var fps: List<Val> = []
+  bldFPs(ns, args, mutref fps, 0)
+  vSt(d.sval, fps)
+}
+fn bldFPs(ns: List<String>, args: List<Val>, mutref fps: List<Val>, i: Int) {
+  if i >= ns.len() { return }
+  var v = vU()
+  if i < args.len() { v = args.get(i) }
+  fps.push(vFP(ns.get(i), v))
+  bldFPs(ns, args, mutref fps, i + 1)
+}
+
+// ── List methods ──
+fn evalLM(mutref ip: Interp, mutref env: List<Val>, obj: Val, m: String, args: List<Val>, oe: Node) -> Val {
+  if m == "len" { return vI(obj.list.len()) }
+  if m == "isEmpty" { return vB(obj.list.len() == 0) }
+  if m == "get" { val i = args.get(0).ival if i >= 0 and i < obj.list.len() { return obj.list.get(i) } return vNone() }
+  if m == "set" {
+    if oe.kind == "Ident" { val c = envGet(env, oe.sval) if c.ty == "L" { var nl: List<Val> = [] rlSet(c.list, args.get(0).ival, args.get(1), mutref nl, 0) envSet(mutref env, oe.sval, vL(nl)) } }
+    return vU()
+  }
+  if m == "push" {
+    if oe.kind == "Ident" { val c = envGet(env, oe.sval) if c.ty == "L" { var nl: List<Val> = [] for x in c.list { nl.push(x) } nl.push(args.get(0)) envSet(mutref env, oe.sval, vL(nl)) } }
+    return vU()
+  }
+  if m == "contains" { return vB(lContains(obj.list, args.get(0), 0)) }
+  if m == "first" { if obj.list.len() > 0 { return vSome(obj.list.get(0)) } return vNone() }
+  if m == "last" { if obj.list.len() > 0 { return obj.list.get(obj.list.len() - 1) } return vNone() }
+  if m == "sum" { return lSum(obj.list) }
+  if m == "sorted" { var es: List<Val> = [] for x in obj.list { es.push(x) } bSort(mutref es) return vL(es) }
+  if m == "map" { if args.len() > 0 and args.get(0).ty == "Lam" { var r: List<Val> = [] mapL(mutref ip, args.get(0), obj.list, mutref r, 0) return vL(r) } return vL([]) }
+  if m == "filter" { if args.len() > 0 and args.get(0).ty == "Lam" { var r: List<Val> = [] filterL(mutref ip, args.get(0), obj.list, mutref r, 0) return vL(r) } return vL([]) }
+  if m == "retainWhere" {
+    if args.len() > 0 and oe.kind == "Ident" and args.get(0).ty == "Lam" {
+      val c = envGet(env, oe.sval)
+      if c.ty == "L" { var r: List<Val> = [] filterL(mutref ip, args.get(0), c.list, mutref r, 0) envSet(mutref env, oe.sval, vL(r)) }
+    }
+    return vU()
+  }
+  panic(f"unknown list method: {m}")
+}
+fn rlSet(src: List<Val>, ri: Int, nv: Val, mutref dst: List<Val>, k: Int) {
+  if k >= src.len() { return }
+  if k == ri { dst.push(nv) } else { dst.push(src.get(k)) }
+  rlSet(src, ri, nv, mutref dst, k + 1)
+}
+fn lContains(l: List<Val>, n: Val, i: Int) -> Bool {
+  if i >= l.len() { return false }
+  if vEq(l.get(i), n) { return true }
+  lContains(l, n, i + 1)
+}
+fn lSum(l: List<Val>) -> Val {
+  if l.len() == 0 { return vI(0) }
+  if l.get(0).ty == "I" { return vI(lSumI(l, 0, 0)) }
+  if l.get(0).ty == "F" { return vF(lSumF(l, 0, 0.0)) }
+  vI(0)
+}
+fn lSumI(l: List<Val>, i: Int, a: Int) -> Int { if i >= l.len() { return a } lSumI(l, i + 1, a + l.get(i).ival) }
+fn lSumF(l: List<Val>, i: Int, a: Float) -> Float { if i >= l.len() { return a } lSumF(l, i + 1, a + l.get(i).fval) }
+fn mapL(mutref ip: Interp, lam: Val, src: List<Val>, mutref dst: List<Val>, i: Int) {
+  if i >= src.len() { return }
+  val r = callLam(mutref ip, lam.ival, lam.fields, [src.get(i)])
+  if isRet(r) { dst.push(unwrapRet(r)) } else { dst.push(r) }
+  mapL(mutref ip, lam, src, mutref dst, i + 1)
+}
+fn filterL(mutref ip: Interp, lam: Val, src: List<Val>, mutref dst: List<Val>, i: Int) {
+  if i >= src.len() { return }
+  val r = callLam(mutref ip, lam.ival, lam.fields, [src.get(i)])
+  var keep = false
+  if isRet(r) { keep = isTruthy(unwrapRet(r)) } else { keep = isTruthy(r) }
+  if keep { dst.push(src.get(i)) }
+  filterL(mutref ip, lam, src, mutref dst, i + 1)
+}
+fn bSort(mutref es: List<Val>) { if es.len() <= 1 { return } bSortO(mutref es, es.len(), 0) }
+fn bSortO(mutref es: List<Val>, n: Int, i: Int) { if i >= n { return } bSortI(mutref es, n, 0) bSortO(mutref es, n, i + 1) }
+fn bSortI(mutref es: List<Val>, n: Int, j: Int) {
+  if j >= n - 1 { return }
+  val a = es.get(j)
+  val b = es.get(j + 1)
+  var sw = false
+  if a.ty == "I" and b.ty == "I" { sw = a.ival > b.ival }
+  if a.ty == "F" and b.ty == "F" { sw = a.fval > b.fval }
+  if a.ty == "S" and b.ty == "S" { sw = a.sval > b.sval }
+  if sw { es.set(j, b) es.set(j + 1, a) }
+  bSortI(mutref es, n, j + 1)
+}
+
+// ── String methods ──
+fn evalSM(obj: Val, m: String, args: List<Val>) -> Val {
+  val s = obj.sval
+  if m == "len" { return vI(s.len()) }
+  if m == "charAt" { val i = args.get(0).ival if i >= 0 and i < s.len() { return vS(s.charAt(i)) } return vS("") }
+  if m == "substring" { return vS(s.substring(args.get(0).ival, args.get(1).ival)) }
+  if m == "startsWith" { return vB(s.startsWith(args.get(0).sval)) }
+  if m == "contains" { return vB(s.contains(args.get(0).sval)) }
+  if m == "charCodeAt" { return vI(s.charCodeAt(args.get(0).ival)) }
+  if m == "split" { val ps = s.split(args.get(0).sval) var r: List<Val> = [] for p in ps { r.push(vS(p)) } return vL(r) }
+  if m == "trim" { return vS(s.trim()) }
+  if m == "replace" { return vS(s.replace(args.get(0).sval, args.get(1).sval)) }
+  if m == "toUpper" { return vS(s.toUpper()) }
+  if m == "toLower" { return vS(s.toLower()) }
+  panic(f"unknown string method: {m}")
+}
+fn evalIM(obj: Val, m: String) -> Val {
+  if m == "toFloat" { return vF(obj.ival.toFloat()) }
+  if m == "toString" { return vS(obj.ival.toString()) }
+  if m == "isEven" { return vB(obj.ival % 2 == 0) }
+  panic(f"unknown int method: {m}")
+}
+fn evalFM(obj: Val, m: String) -> Val {
+  if m == "toString" { return vS(v2s(obj)) }
+  panic(f"unknown float method: {m}")
+}
+
+// ── Match ──
+fn evalMatch(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val {
+  val subj = evalExpr(mutref ip, mutref env, e.children.get(0))
+  if isRet(subj) { return subj }
+  evalMAs(mutref ip, mutref env, e.children, subj, 1)
+}
+fn evalMAs(mutref ip: Interp, mutref env: List<Val>, arms: List<Node>, subj: Val, i: Int) -> Val {
+  if i >= arms.len() { panic("no matching arm") }
+  val arm = arms.get(i)
+  var bs: List<Val> = []
+  if matchPat(arm.children.get(0), subj, mutref bs) {
+    envPush(mutref env)
+    addBs(mutref env, bs, 0)
+    val r = evalExpr(mutref ip, mutref env, arm.children.get(1))
+    envPop(mutref env)
+    return r
+  }
+  evalMAs(mutref ip, mutref env, arms, subj, i + 1)
+}
+fn addBs(mutref env: List<Val>, bs: List<Val>, i: Int) {
+  if i >= bs.len() { return }
+  envDef(mutref env, bs.get(i).sval, bs.get(i).fields.get(0))
+  addBs(mutref env, bs, i + 1)
+}
+fn matchPat(p: Node, v: Val, mutref bs: List<Val>) -> Bool {
+  if p.kind == "PW" { return true }
+  if p.kind == "PN" { return v.ty == "I" and v.ival == p.ival }
+  if p.kind == "PF" { return v.ty == "F" and v.fval == p.fval }
+  if p.kind == "PS" { return v.ty == "S" and v.sval == p.sval }
+  if p.kind == "PB" { return v.ty == "B" and v.bval == p.bval }
+  if p.kind == "PI" {
+    if p.sval.contains(".") { if v.ty == "En" { val m = v.sval == p.sval and v.fields.len() == 0 return m } return false }
+    if p.sval == "None" { return isNone(v) }
+    bs.push(vFP(p.sval, v))
+    return true
+  }
+  if p.kind == "PC" {
+    if v.ty == "En" {
+      var en = ""
+      var vn = ""
+      if p.sval.contains(".") { val ps = p.sval.split(".") en = ps.get(0) vn = ps.get(1) }
+      else {
+        if p.sval == "Some" or p.sval == "None" { en = "Option" vn = p.sval }
+        else if p.sval == "Ok" or p.sval == "Err" { en = "Result" vn = p.sval }
+        else { en = v.sval.split(".").get(0) vn = p.sval }
+      }
+      val et = f"{en}.{vn}"
+      if v.sval != et { return false }
+      if p.children.len() == 0 { return true }
+      if p.children.len() == 1 {
+        var inner = vU()
+        if v.fields.len() > 0 { inner = v.fields.get(0) }
+        return matchPat(p.children.get(0), inner, mutref bs)
+      }
+    }
+    return false
+  }
+  if p.kind == "PT" {
+    if v.ty == "L" {
+      if p.children.len() != v.list.len() { return false }
+      return matchTEs(p.children, v.list, mutref bs, 0)
+    }
+    return false
+  }
+  false
+}
+fn matchTEs(ps: List<Node>, vs: List<Val>, mutref bs: List<Val>, i: Int) -> Bool {
+  if i >= ps.len() { return true }
+  if not matchPat(ps.get(i), vs.get(i), mutref bs) { return false }
+  matchTEs(ps, vs, mutref bs, i + 1)
+}
+
+// ── When ──
+fn evalWhen(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val { evalWAs(mutref ip, mutref env, e.children, 0) }
+fn evalWAs(mutref ip: Interp, mutref env: List<Val>, arms: List<Node>, i: Int) -> Val {
+  if i >= arms.len() { panic("when: no arm") }
+  val arm = arms.get(i)
+  if arm.kind == "WE" { return evalExpr(mutref ip, mutref env, arm.children.get(0)) }
+  val c = evalExpr(mutref ip, mutref env, arm.children.get(0))
+  if isRet(c) { return c }
+  if isTruthy(c) { return evalExpr(mutref ip, mutref env, arm.children.get(1)) }
+  evalWAs(mutref ip, mutref env, arms, i + 1)
+}
+
+// ── FString ──
+fn evalFS(mutref ip: Interp, mutref env: List<Val>, e: Node) -> Val {
+  val parts = e.sval.split("\x01")
+  var r = ""
+  evalFSPs(mutref ip, mutref env, parts, mutref r, 0)
+  vS(r)
+}
+fn evalFSPs(mutref ip: Interp, mutref env: List<Val>, parts: List<String>, mutref r: String, i: Int) {
+  if i >= parts.len() { return }
+  val p = parts.get(i)
+  if p.len() > 0 {
+    if p.charAt(0) == "L" { r = r + p.substring(1, p.len()) }
+    else if p.charAt(0) == "E" {
+      val toks = tokenize(p.substring(1, p.len()))
+      var sp = newParser(toks)
+      val v = evalExpr(mutref ip, mutref env, sp.parseExpr())
+      if isRet(v) { r = r + v2s(unwrapRet(v)) } else { r = r + v2s(v) }
+    }
+  }
+  evalFSPs(mutref ip, mutref env, parts, mutref r, i + 1)
+}
+
+
+// =============================================================================
+// Section 8: Entry point
+// =============================================================================
+
+@entrypoint
+fn main() -> Result<(), String> {
+  val cmdArgs = args()
+  var sourceFile = ""
+  var foundDash = false
+  for arg in cmdArgs {
+    if foundDash and sourceFile == "" { sourceFile = arg }
+    if arg == "--" { foundDash = true }
+  }
+  if sourceFile == "" {
+    if cmdArgs.len() > 1 { sourceFile = cmdArgs.get(cmdArgs.len() - 1) }
+  }
+  if sourceFile == "" { eprintln("Usage: fusec stage2/src/main.fuse -- <file.fuse>") exit(1) }
+  eprintln("Stage2: reading file...")
+  val source = readFile(sourceFile)?
+  eprintln(f"Stage2: file read, {source.len()} chars")
+  val tokens = tokenize(source)
+  eprintln(f"Stage2: tokenized, {tokens.len()} tokens")
+  var parser = newParser(tokens)
+  val program = parser.parseProgram()
+  eprintln("Stage2: parsed")
+  var interp = newInterp(program)
+  runProg(mutref interp, program)
+  Ok(())
+}

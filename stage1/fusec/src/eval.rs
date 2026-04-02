@@ -302,7 +302,7 @@ impl Evaluator {
         // Built-in methods
         match obj {
             FuseValue::List(_) => return self.list_method(obj.clone(), method, args, env),
-            FuseValue::Str(_) => return self.string_method(obj, method),
+            FuseValue::Str(_) => return self.string_method_with_args(obj, method, &args),
             FuseValue::Int(_) => return self.int_method(obj, method),
             FuseValue::Float(_) => return self.float_method(obj, method),
             _ => {}
@@ -346,17 +346,56 @@ impl Evaluator {
             "len" => fuse_list_len(&list),
             "isEmpty" => fuse_list_is_empty(&list),
             "sum" => fuse_list_sum(&list),
+            "get" => {
+                let i = args[0].as_int() as usize;
+                let elems = list.as_list();
+                if i < elems.len() { elems[i].clone() } else { FuseValue::none() }
+            }
+            "set" => {
+                let i = args[0].as_int() as usize;
+                let val = args[1].clone();
+                let elems = list.as_list_mut();
+                if i < elems.len() { elems[i] = val; }
+                FuseValue::Unit
+            }
+            "push" => {
+                if let Some(val) = args.into_iter().next() {
+                    list.as_list_mut().push(val);
+                }
+                FuseValue::Unit
+            }
+            "contains" => {
+                let needle = &args[0];
+                FuseValue::Bool(list.as_list().iter().any(|e| e.fuse_eq(needle)))
+            }
             _ => panic!("unknown list method: {method}"),
         }
     }
 
-    fn string_method(&self, s: &FuseValue, method: &str) -> FuseValue {
+    fn string_method_with_args(&self, s: &FuseValue, method: &str, args: &[FuseValue]) -> FuseValue {
         match method {
             "toUpper" => fuse_string_to_upper(s),
             "toLower" => fuse_string_to_lower(s),
             "len" => fuse_string_len(s),
+            "charAt" => fuse_string_char_at(s, &args[0]),
+            "substring" => fuse_string_substring(s, &args[0], &args[1]),
+            "startsWith" => fuse_string_starts_with(s, &args[0]),
+            "contains" => fuse_string_contains(s, &args[0]),
+            "charCodeAt" => fuse_string_char_code_at(s, &args[0]),
+            "split" => {
+                let delim = args[0].as_str();
+                let parts: Vec<FuseValue> = s.as_str().split(delim)
+                    .map(|p| FuseValue::Str(p.to_string())).collect();
+                FuseValue::List(parts)
+            }
+            "trim" => FuseValue::Str(s.as_str().trim().to_string()),
+            "replace" => FuseValue::Str(s.as_str().replace(args[0].as_str(), args[1].as_str())),
             _ => panic!("unknown string method: {method}"),
         }
+    }
+
+    fn string_method(&self, s: &FuseValue, method: &str) -> FuseValue {
+        self.string_method_with_args(s, method, &[])
     }
 
     fn int_method(&self, v: &FuseValue, method: &str) -> FuseValue {
@@ -828,17 +867,35 @@ impl Evaluator {
             for a in arg_exprs { args.push(self.eval_expr(a, env)?); }
 
             // Mutating list methods (mutref semantics): modify variable in-place
-            if matches!(&obj, FuseValue::List(_)) && method == "retainWhere" {
+            if matches!(&obj, FuseValue::List(_)) && (method == "retainWhere" || method == "push" || method == "set") {
                 if let Expr::Ident(var_name, _) = obj_expr.as_ref() {
                     if let Some(mut list_val) = env.get(var_name) {
-                        if let Some(FuseValue::Lambda(ref lam)) = args.first() {
-                            let lam = lam.clone();
-                            let elems = list_val.as_list_mut();
-                            elems.retain(|e| {
-                                self.call_lambda(&lam, vec![e.clone()]).is_truthy()
-                            });
-                            env.set(var_name, list_val);
+                        match method.as_str() {
+                            "retainWhere" => {
+                                if let Some(FuseValue::Lambda(ref lam)) = args.first() {
+                                    let lam = lam.clone();
+                                    let elems = list_val.as_list_mut();
+                                    elems.retain(|e| {
+                                        self.call_lambda(&lam, vec![e.clone()]).is_truthy()
+                                    });
+                                }
+                            }
+                            "push" => {
+                                if let Some(val) = args.into_iter().next() {
+                                    list_val.as_list_mut().push(val);
+                                }
+                            }
+                            "set" => {
+                                if args.len() >= 2 {
+                                    let i = args[0].as_int() as usize;
+                                    let val = args[1].clone();
+                                    let elems = list_val.as_list_mut();
+                                    if i < elems.len() { elems[i] = val; }
+                                }
+                            }
+                            _ => {}
                         }
+                        env.set(var_name, list_val);
                         return Ok(FuseValue::Unit);
                     }
                 }
@@ -860,6 +917,43 @@ impl Evaluator {
                 "Some" => { return Ok(FuseValue::some(args.into_iter().next().unwrap_or(FuseValue::Unit))); }
                 "Ok" => { return Ok(FuseValue::ok(args.into_iter().next().unwrap_or(FuseValue::Unit))); }
                 "Err" => { return Ok(FuseValue::err(args.into_iter().next().unwrap_or(FuseValue::Unit))); }
+                "readFile" => {
+                    let path = args[0].as_str().to_string();
+                    match std::fs::read_to_string(&path) {
+                        Ok(s) => return Ok(FuseValue::ok(FuseValue::Str(s))),
+                        Err(e) => return Ok(FuseValue::err(FuseValue::Str(format!("{e}")))),
+                    }
+                }
+                "args" => {
+                    let a: Vec<FuseValue> = std::env::args()
+                        .map(|s| FuseValue::Str(s)).collect();
+                    return Ok(FuseValue::List(a));
+                }
+                "exit" => {
+                    let code = args.first().map(|v| v.as_int()).unwrap_or(0);
+                    std::process::exit(code as i32);
+                }
+                "fromCharCode" => {
+                    return Ok(fuse_string_from_char_code(&args[0]));
+                }
+                "parseInt" => {
+                    let s = args[0].as_str();
+                    return Ok(match s.parse::<i64>() {
+                        Ok(v) => FuseValue::ok(FuseValue::Int(v)),
+                        Err(_) => FuseValue::err(FuseValue::Str("parse error".into())),
+                    });
+                }
+                "parseFloat" => {
+                    let s = args[0].as_str();
+                    return Ok(match s.parse::<f64>() {
+                        Ok(v) => FuseValue::ok(FuseValue::Float(v)),
+                        Err(_) => FuseValue::err(FuseValue::Str("parse error".into())),
+                    });
+                }
+                "panic" => {
+                    let msg = args.first().map(|v| format!("{v}")).unwrap_or_default();
+                    panic!("Fuse panic: {msg}");
+                }
                 _ => {}
             }
 

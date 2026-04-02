@@ -339,7 +339,7 @@ impl FuseValue {
         }
     }
 
-    fn fuse_eq(&self, other: &FuseValue) -> bool {
+    pub fn fuse_eq(&self, other: &FuseValue) -> bool {
         match (self, other) {
             (FuseValue::Int(a), FuseValue::Int(b)) => a == b,
             (FuseValue::Float(a), FuseValue::Float(b)) => a == b,

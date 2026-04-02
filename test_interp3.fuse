@@ -1,0 +1,8 @@
+@entrypoint
+fn main() {
+  val ch = "h"
+  val c = ch.charCodeAt(0)
+  println(c)
+  val r = c >= 65
+  println(r)
+}

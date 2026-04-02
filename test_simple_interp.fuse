@@ -1,0 +1,10 @@
+fn rec(n: Int) {
+  if n <= 0 { return }
+  rec(n - 1)
+}
+
+@entrypoint
+fn main() {
+  rec(1000)
+  println("done")
+}

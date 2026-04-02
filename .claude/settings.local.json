@@ -10,7 +10,27 @@
       "Bash(python tests/run_tests.py)",
       "Read(//tmp/**)",
       "Bash(sed -n '86,102p' /d/rust/fuse/docs/guide/fuse-language-guide.md)",
-      "Bash(sed -n '763,773p' /d/rust/fuse/docs/guide/fuse-language-guide.md)"
+      "Bash(sed -n '763,773p' /d/rust/fuse/docs/guide/fuse-language-guide.md)",
+      "Bash(cargo check:*)",
+      "Bash(cargo build:*)",
+      "Bash(./target/debug/fusec /tmp/test_simple.fuse)",
+      "Bash(grep -n \"TODO\\\\|FIXME\\\\|XXX\\\\|HACK\" fusec/src/**/*.rs)",
+      "Bash(cargo test:*)",
+      "Bash(./target/release/fusec.exe --version)",
+      "Bash(./target/release/fusec.exe --help)",
+      "Bash(./target/release/fusec.exe -v)",
+      "Bash(./target/release/fusec.exe)",
+      "Bash(echo \"exit: $?\")",
+      "Bash(stage1/target/debug/fusec.exe examples/hello.fuse)",
+      "Bash(stage1/target/debug/fusec.exe stage2/src/main.fuse -- examples/hello.fuse)",
+      "Bash(RUST_MIN_STACK=16777216 stage1/target/debug/fusec.exe stage2/src/main.fuse -- examples/hello.fuse)",
+      "Bash(timeout 10 stage1/target/debug/fusec.exe --check stage2/src/main.fuse)",
+      "Bash(stage1/target/debug/fusec.exe stage2/src/main.fuse -- test_tiny.fuse)",
+      "Bash(stage1/target/debug/fusec.exe test_minimal_interp.fuse)",
+      "Bash(stage1/target/debug/fusec.exe test_interp2.fuse)",
+      "Bash(stage1/target/debug/fusec.exe test_interp3.fuse)",
+      "Bash(stage1/target/debug/fusec.exe test_interp4.fuse)",
+      "Bash(stage1/target/debug/fusec.exe test_interp5.fuse)"
     ]
   }
 }

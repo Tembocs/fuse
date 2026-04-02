@@ -1,0 +1,10 @@
+fn test() -> Bool {
+  val c = 104
+  val r = (c >= 65)
+  r
+}
+
+@entrypoint
+fn main() {
+  println(test())
+}

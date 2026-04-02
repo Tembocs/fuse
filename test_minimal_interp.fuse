@@ -1,0 +1,21 @@
+// Minimal test of the interpreter structure
+
+data class Val(
+  val ty: String,
+  val sval: String,
+  val ival: Int,
+  val fval: Float,
+  val bval: Bool,
+  val list: List<Val>,
+  val fields: List<Val>
+)
+
+fn vStr(s: String) -> Val { Val("Str", s, 0, 0.0, false, [], []) }
+
+@entrypoint
+fn main() {
+  val v = vStr("hello")
+  println(v.sval)
+  val a = args()
+  println(a.len())
+}
