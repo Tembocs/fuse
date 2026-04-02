@@ -188,6 +188,11 @@ pub static RT_FUNCTIONS: &[RtFuncInfo] = &[
     RtFuncInfo { name: "fuse_rt_float_to_string", params: &[PTR_TYPE],             ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_to_display_string", params: &[PTR_TYPE],           ret: Some(PTR_TYPE) },
 
+    // Lambda-based list operations (fn_ptr is i64 on 64-bit, env is PTR)
+    RtFuncInfo { name: "fuse_rt_list_map_fn",    params: &[PTR_TYPE, PTR_TYPE, PTR_TYPE], ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_list_filter_fn", params: &[PTR_TYPE, PTR_TYPE, PTR_TYPE], ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_list_retain_fn", params: &[PTR_TYPE, PTR_TYPE, PTR_TYPE], ret: None },
+
     // Generic method dispatch
     RtFuncInfo { name: "fuse_rt_len",            params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_contains",       params: &[PTR_TYPE, PTR_TYPE],     ret: Some(PTR_TYPE) },

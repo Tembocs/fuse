@@ -499,6 +499,66 @@ pub extern "C" fn fuse_rt_to_display_string(v: *mut FuseValue) -> *mut FuseValue
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Lambda-based list operations
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Type alias for a compiled Fuse function that takes (env, arg) and returns a value.
+type FuseFnPtr = extern "C" fn(*mut FuseValue, *mut FuseValue) -> *mut FuseValue;
+
+/// Map a compiled function over a list.
+/// `fn_ptr` is a compiled Fuse lambda function.
+/// `env` is the captured environment (or null).
+#[no_mangle]
+pub extern "C" fn fuse_rt_list_map_fn(
+    list: *mut FuseValue, fn_ptr: FuseFnPtr, env: *mut FuseValue,
+) -> *mut FuseValue {
+    let items = unsafe { ref_val(list) }.as_list().clone();
+    let mut result = Vec::new();
+    for item in &items {
+        let arg = box_val(item.clone());
+        let mapped = fn_ptr(env, arg);
+        result.push(unsafe { ref_val(mapped).clone() });
+    }
+    box_val(FuseValue::List(result))
+}
+
+/// Filter a list using a compiled predicate function.
+#[no_mangle]
+pub extern "C" fn fuse_rt_list_filter_fn(
+    list: *mut FuseValue, fn_ptr: FuseFnPtr, env: *mut FuseValue,
+) -> *mut FuseValue {
+    let items = unsafe { ref_val(list) }.as_list().clone();
+    let mut result = Vec::new();
+    for item in &items {
+        let arg = box_val(item.clone());
+        let keep = fn_ptr(env, arg);
+        if unsafe { ref_val(keep).is_truthy() } {
+            result.push(item.clone());
+        }
+    }
+    box_val(FuseValue::List(result))
+}
+
+/// Retain elements in-place using a compiled predicate function.
+#[no_mangle]
+pub extern "C" fn fuse_rt_list_retain_fn(
+    list: *mut FuseValue, fn_ptr: FuseFnPtr, env: *mut FuseValue,
+) {
+    let items = unsafe { ref_val(list) }.as_list().clone();
+    let mut result = Vec::new();
+    for item in &items {
+        let arg = box_val(item.clone());
+        let keep = fn_ptr(env, arg);
+        if unsafe { ref_val(keep).is_truthy() } {
+            result.push(item.clone());
+        }
+    }
+    if let FuseValue::List(ref mut l) = unsafe { mut_val(list) } {
+        *l = result;
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // Generic method dispatch (type-aware)
 // ═══════════════════════════════════════════════════════════════════════
 

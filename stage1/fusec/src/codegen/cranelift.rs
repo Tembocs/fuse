@@ -24,6 +24,9 @@ pub struct Codegen {
     rt_fns: HashMap<String, FuncId>,
     string_data: HashMap<String, DataId>,
     str_counter: usize,
+    lambda_counter: usize,
+    /// Lambdas to compile (collected during function codegen, compiled after).
+    pending_lambdas: Vec<(String, Vec<String>, Vec<HirStmt>)>, // (mangled_name, params, body)
 }
 
 impl Codegen {
@@ -41,6 +44,8 @@ impl Codegen {
             rt_fns: HashMap::new(),
             string_data: HashMap::new(),
             str_counter: 0,
+            lambda_counter: 0,
+            pending_lambdas: Vec::new(),
         }
     }
 
@@ -64,6 +69,14 @@ impl Codegen {
 
         for f in fn_decls.iter().chain(method_decls.iter()) {
             self.codegen_fn(f);
+        }
+
+        // Compile any pending lambdas (may produce more lambdas, so loop).
+        while !self.pending_lambdas.is_empty() {
+            let lambdas = std::mem::take(&mut self.pending_lambdas);
+            for (name, params, body) in lambdas {
+                self.compile_lambda(&name, &params, &body);
+            }
         }
 
         self.generate_main(program);
@@ -116,6 +129,48 @@ impl Codegen {
         self.fuse_fns.insert(mangled, id);
     }
 
+    /// Compile a lambda as a standalone Cranelift function.
+    /// Signature: fn(env: *mut FuseValue, arg: *mut FuseValue) -> *mut FuseValue
+    fn compile_lambda(&mut self, name: &str, params: &[String], body: &[HirStmt]) {
+        let func_id = *self.fuse_fns.get(name).unwrap();
+        let cc = self.module.isa().default_call_conv();
+        // Lambda signature: (env, arg) -> result
+        let sig = fuse_fn_sig(2, cc);
+
+        let mut func = Function::new();
+        func.signature = sig;
+        let mut bctx = FunctionBuilderContext::new();
+        {
+            let mut b = FunctionBuilder::new(&mut func, &mut bctx);
+            let entry = b.create_block();
+            b.append_block_params_for_function_params(entry);
+            b.switch_to_block(entry);
+            b.seal_block(entry);
+
+            {
+                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas);
+                let bp: Vec<Value> = ctx.b.block_params(entry).to_vec();
+                let _env = bp[0]; // captured env (unused for now)
+                let arg = bp[1];  // the argument value
+
+                // Bind the first param name to the argument.
+                if let Some(p) = params.first() {
+                    ctx.def(p, arg);
+                }
+
+                let result = ctx.stmts(body);
+                if !ctx.terminated {
+                    let rv = result.unwrap_or_else(|| ctx.rt("fuse_rt_unit", &[]));
+                    ctx.b.ins().return_(&[rv]);
+                }
+            }
+            b.seal_all_blocks();
+            b.finalize();
+        }
+        let mut cctx = cranelift::codegen::Context::for_function(func);
+        self.module.define_function(func_id, &mut cctx).unwrap();
+    }
+
     fn intern_string(&mut self, s: &str) -> DataId {
         if let Some(&id) = self.string_data.get(s) { return id; }
         let name = format!(".str.{}", self.str_counter);
@@ -150,7 +205,7 @@ impl Codegen {
             b.seal_block(entry);
 
             {
-                let mut ctx = FnGen::new(&mut b, &mut self.module, &self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter);
+                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas);
                 let params: Vec<Value> = ctx.b.block_params(entry).to_vec();
 
                 let mut pi = 0;
@@ -259,7 +314,7 @@ impl Codegen {
 struct FnGen<'a, 'b> {
     b: &'a mut FunctionBuilder<'b>,
     module: &'a mut ObjectModule,
-    fuse_fns: &'a HashMap<String, FuncId>,
+    fuse_fns: &'a mut HashMap<String, FuncId>,
     rt_fns: &'a HashMap<String, FuncId>,
     string_data: &'a mut HashMap<String, DataId>,
     str_counter: &'a mut usize,
@@ -269,19 +324,26 @@ struct FnGen<'a, 'b> {
     terminated: bool,
     /// Deferred expressions to execute before function return (LIFO order).
     defers: Vec<HirExpr>,
+    /// Lambda counter (shared with Codegen via pointer).
+    lambda_counter: &'a mut usize,
+    /// Pending lambdas to compile after the current function.
+    pending_lambdas: &'a mut Vec<(String, Vec<String>, Vec<HirStmt>)>,
 }
 
 impl<'a, 'b> FnGen<'a, 'b> {
     fn new(
         b: &'a mut FunctionBuilder<'b>,
         module: &'a mut ObjectModule,
-        fuse_fns: &'a HashMap<String, FuncId>,
+        fuse_fns: &'a mut HashMap<String, FuncId>,
         rt_fns: &'a HashMap<String, FuncId>,
         string_data: &'a mut HashMap<String, DataId>,
         str_counter: &'a mut usize,
+        lambda_counter: &'a mut usize,
+        pending_lambdas: &'a mut Vec<(String, Vec<String>, Vec<HirStmt>)>,
     ) -> Self {
         Self { b, module, fuse_fns, rt_fns, string_data, str_counter,
-               vars: HashMap::new(), next_var: 0, terminated: false, defers: Vec::new() }
+               vars: HashMap::new(), next_var: 0, terminated: false,
+               defers: Vec::new(), lambda_counter, pending_lambdas }
     }
 
     fn def(&mut self, name: &str, val: Value) {
@@ -314,6 +376,12 @@ impl<'a, 'b> FnGen<'a, 'b> {
         } else {
             self.rt("fuse_rt_unit", &[])
         }
+    }
+
+    fn cg_lambda_id(&mut self) -> usize {
+        let id = *self.lambda_counter;
+        *self.lambda_counter += 1;
+        id
     }
 
     /// Emit all deferred expressions in reverse (LIFO) order.
@@ -606,7 +674,19 @@ impl<'a, 'b> FnGen<'a, 'b> {
             HirExprKind::Move(inner) | HirExprKind::MutrefE(inner) | HirExprKind::RefE(inner) =>
                 self.expr(inner),
             HirExprKind::Block(ss) => self.stmts(ss).unwrap_or_else(|| self.rt("fuse_rt_unit", &[])),
-            HirExprKind::Lambda { .. } => self.rt("fuse_rt_unit", &[]), // TODO
+            HirExprKind::Lambda { params, body, .. } => {
+                // Create a lambda function and return its pointer.
+                let lam_name = format!("fuse_lambda_{}", self.cg_lambda_id());
+                let cc = self.module.isa().default_call_conv();
+                let sig = fuse_fn_sig(2, cc); // (env, arg) -> result
+                let func_id = self.module.declare_function(&lam_name, Linkage::Local, &sig).unwrap();
+                self.fuse_fns.insert(lam_name.clone(), func_id);
+                self.pending_lambdas.push((lam_name.clone(), params.clone(), body.clone()));
+                // Return the function pointer as an i64 value.
+                let fref = self.module.declare_func_in_func(func_id, self.b.func);
+                let ptr = self.b.ins().func_addr(PTR_TYPE, fref);
+                ptr
+            }
             HirExprKind::PathCall { .. } => self.rt("fuse_rt_unit", &[]), // TODO
             HirExprKind::Spawn(_, _) | HirExprKind::Await(_) => self.rt("fuse_rt_unit", &[]), // TODO
         }
@@ -688,6 +768,20 @@ impl<'a, 'b> FnGen<'a, 'b> {
             "toFloat" => return self.rt("fuse_rt_int_to_float", &[obj]),
             "toString" => return self.rt("fuse_rt_to_display_string", &[obj]),
             "isEven" => return self.rt("fuse_rt_int_is_even", &[obj]),
+            "map" if !avs.is_empty() => {
+                // avs[0] is a lambda function pointer.
+                let null_env = self.b.ins().iconst(types::I64, 0);
+                return self.rt("fuse_rt_list_map_fn", &[obj, avs[0], null_env]);
+            }
+            "filter" if !avs.is_empty() => {
+                let null_env = self.b.ins().iconst(types::I64, 0);
+                return self.rt("fuse_rt_list_filter_fn", &[obj, avs[0], null_env]);
+            }
+            "retainWhere" if !avs.is_empty() => {
+                let null_env = self.b.ins().iconst(types::I64, 0);
+                self.rt_void("fuse_rt_list_retain_fn", &[obj, avs[0], null_env]);
+                return self.rt("fuse_rt_unit", &[]);
+            }
             _ => {}
         }
         // Extension function lookup.
