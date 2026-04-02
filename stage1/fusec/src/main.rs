@@ -12,6 +12,8 @@ use lexer::Lexer;
 use parser::Parser;
 use checker::Checker;
 use eval::Evaluator;
+use hir::lower::Lowerer;
+use codegen::cranelift::Codegen;
 
 const VERSION: &str = "0.1.0";
 
@@ -39,10 +41,11 @@ fn real_main() {
         println!("Usage: fusec [options] <file.fuse>");
         println!();
         println!("Options:");
-        println!("  <file.fuse>       Run a Fuse source file");
-        println!("  --check <file>    Check for errors without running");
-        println!("  --version, -v     Print version");
-        println!("  --help, -h        Print this help");
+        println!("  <file.fuse>               Run a Fuse source file (interpreter)");
+        println!("  --compile <file> [-o out]  Compile to native binary");
+        println!("  --check <file>            Check for errors without running");
+        println!("  --version, -v              Print version");
+        println!("  --help, -h                 Print this help");
         if args.len() < 2 { process::exit(1); }
         return;
     }
@@ -52,10 +55,17 @@ fn real_main() {
         return;
     }
 
-    let (mode, filepath) = if args[1] == "--check" && args.len() > 2 {
-        ("check", &args[2])
+    let (mode, filepath, output) = if args[1] == "--check" && args.len() > 2 {
+        ("check", &args[2], String::new())
+    } else if args[1] == "--compile" && args.len() > 2 {
+        let out = if args.len() > 4 && args[3] == "-o" {
+            args[4].clone()
+        } else {
+            args[2].trim_end_matches(".fuse").to_string()
+        };
+        ("compile", &args[2], out)
     } else {
-        ("run", &args[1])
+        ("run", &args[1], String::new())
     };
 
     let source = match fs::read_to_string(filepath) {
@@ -63,10 +73,10 @@ fn real_main() {
         Err(e) => { eprintln!("error: {e}"); process::exit(1); }
     };
 
-    run(mode, &source, filepath);
+    run(mode, &source, filepath, &output);
 }
 
-fn run(mode: &str, source: &str, filepath: &str) {
+fn run(mode: &str, source: &str, filepath: &str, output: &str) {
     let display_name = std::path::Path::new(filepath)
         .file_name()
         .and_then(|n| n.to_str())
@@ -100,6 +110,15 @@ fn run(mode: &str, source: &str, filepath: &str) {
     }
 
     if mode == "check" { return; }
+
+    if mode == "compile" {
+        // Compile — lower to HIR and generate native binary via Cranelift.
+        let mut lowerer = Lowerer::new();
+        let hir_program = lowerer.lower(&program);
+        let cg = Codegen::new();
+        cg.compile(&hir_program, output);
+        return;
+    }
 
     // Run — tree-walking evaluation using fuse-runtime
     let mut evaluator = Evaluator::new(program, display_name);
