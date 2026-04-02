@@ -1,0 +1,777 @@
+
+// =============================================================================
+// Section 7: Code generation — expressions
+// =============================================================================
+
+fn cgExpr(mutref c: Compiler, e: Node) -> Int {
+  if e.kind == "IntLit" { return rt1(mutref c, "fuse_rt_int", cl_iconst(c.bld, e.ival)) }
+  if e.kind == "FloatLit" { return rt1(mutref c, "fuse_rt_float", cl_f64const(c.bld, e.fval)) }
+  if e.kind == "StrLit" { return makeStr(mutref c, e.sval) }
+  if e.kind == "BoolLit" { return rt1(mutref c, "fuse_rt_bool", cl_iconst_i8(c.bld, when { e.bval => 1 else => 0 })) }
+  if e.kind == "Unit" { return rt0(mutref c, "fuse_rt_unit") }
+  if e.kind == "Ident" { val v = useVar(c, e.sval)
+  if v >= 0 { return v }
+  return rt0(mutref c, "fuse_rt_unit") }
+  if e.kind == "SelfExpr" { val v = useVar(c, "self")
+  if v >= 0 { return v }
+  return rt0(mutref c, "fuse_rt_unit") }
+  if e.kind == "BinOp" { return cgBinOp(mutref c, e) }
+  if e.kind == "Neg" { return rt1(mutref c, "fuse_rt_neg", cgExpr(mutref c, e.children.get(0))) }
+  if e.kind == "UnaryNot" {
+    val v = cgExpr(mutref c, e.children.get(0))
+    val tr = rt1(mutref c, "fuse_rt_is_truthy", v)
+    return rt1(mutref c, "fuse_rt_bool", cl_icmp(c.bld, 0, tr, cl_iconst_i8(c.bld, 0)))
+  }
+  if e.kind == "Move" {
+    if e.children.get(0).kind == "Ident" { c.destroyed.push(e.children.get(0).sval) }
+    return cgExpr(mutref c, e.children.get(0))
+  }
+  if e.kind == "Ref" or e.kind == "Mutref" { return cgExpr(mutref c, e.children.get(0)) }
+  if e.kind == "Field" { return cgField(mutref c, e) }
+  if e.kind == "OptChain" { return cgOptChain(mutref c, e) }
+  if e.kind == "Question" { return cgQuestion(mutref c, e) }
+  if e.kind == "Elvis" { return cgElvis(mutref c, e) }
+  if e.kind == "Call" { return cgCall(mutref c, e) }
+  if e.kind == "Match" { return cgMatch(mutref c, e) }
+  if e.kind == "When" { return cgWhen(mutref c, e) }
+  if e.kind == "FString" { return cgFStr(mutref c, e) }
+  if e.kind == "ListLit" or e.kind == "Tuple" {
+    val l = rt0(mutref c, "fuse_rt_list_new")
+    for ch in e.children { rt2(mutref c, "fuse_rt_list_push", l, cgExpr(mutref c, ch)) }
+    return l
+  }
+  if e.kind == "Lambda" { return cgLambda(mutref c, e) }
+  if e.kind == "Block" { return cgStmts(mutref c, e.children) }
+  rt0(mutref c, "fuse_rt_unit")
+}
+
+fn cgBinOp(mutref c: Compiler, e: Node) -> Int {
+  if e.sval == "and" { return cgAnd(mutref c, e) }
+  if e.sval == "or" { return cgOr(mutref c, e) }
+  val lv = cgExpr(mutref c, e.children.get(0))
+  val rv = cgExpr(mutref c, e.children.get(1))
+  var fn_ = "fuse_rt_add"
+  if e.sval == "-" { fn_ = "fuse_rt_sub" }
+  if e.sval == "*" { fn_ = "fuse_rt_mul" }
+  if e.sval == "/" { fn_ = "fuse_rt_div" }
+  if e.sval == "%" { fn_ = "fuse_rt_mod" }
+  if e.sval == "==" { fn_ = "fuse_rt_eq" }
+  if e.sval == "!=" { fn_ = "fuse_rt_ne" }
+  if e.sval == "<" { fn_ = "fuse_rt_lt" }
+  if e.sval == ">" { fn_ = "fuse_rt_gt" }
+  if e.sval == "<=" { fn_ = "fuse_rt_le" }
+  if e.sval == ">=" { fn_ = "fuse_rt_ge" }
+  rt2(mutref c, fn_, lv, rv)
+}
+
+fn cgAnd(mutref c: Compiler, e: Node) -> Int {
+  val lv = cgExpr(mutref c, e.children.get(0))
+  val lt = rt1(mutref c, "fuse_rt_is_truthy", lv)
+  val rb = cl_block_new(c.bld)
+  val mb = cl_block_new(c.bld)
+  cl_block_append_param(c.bld, mb)
+  val fv = rt1(mutref c, "fuse_rt_bool", cl_iconst_i8(c.bld, 0))
+  cl_brif(c.bld, lt, rb, mb)
+  val fA = [fv]
+  cl_jump(c.bld, mb, fA, 1)
+  cl_block_switch(c.bld, rb)
+  cl_block_seal(c.bld, rb)
+  val rv = cgExpr(mutref c, e.children.get(1))
+  val res = rt1(mutref c, "fuse_rt_bool", rt1(mutref c, "fuse_rt_is_truthy", rv))
+  val rA = [res]
+  cl_jump(c.bld, mb, rA, 1)
+  cl_block_switch(c.bld, mb)
+  cl_block_seal(c.bld, mb)
+  cl_block_param(c.bld, mb, 0)
+}
+
+fn cgOr(mutref c: Compiler, e: Node) -> Int {
+  val lv = cgExpr(mutref c, e.children.get(0))
+  val lt = rt1(mutref c, "fuse_rt_is_truthy", lv)
+  val rb = cl_block_new(c.bld)
+  val mb = cl_block_new(c.bld)
+  cl_block_append_param(c.bld, mb)
+  val tv = rt1(mutref c, "fuse_rt_bool", cl_iconst_i8(c.bld, 1))
+  cl_brif(c.bld, lt, mb, rb)
+  val tA = [tv]
+  cl_jump(c.bld, mb, tA, 1)
+  cl_block_switch(c.bld, rb)
+  cl_block_seal(c.bld, rb)
+  val rv = cgExpr(mutref c, e.children.get(1))
+  val res = rt1(mutref c, "fuse_rt_bool", rt1(mutref c, "fuse_rt_is_truthy", rv))
+  val rA = [res]
+  cl_jump(c.bld, mb, rA, 1)
+  cl_block_switch(c.bld, mb)
+  cl_block_seal(c.bld, mb)
+  cl_block_param(c.bld, mb, 0)
+}
+
+fn cgField(mutref c: Compiler, e: Node) -> Int {
+  val oe = e.children.get(0)
+  if oe.kind == "Ident" {
+    for en in c.enums {
+      if en.sval == oe.sval {
+        val ep = sConst(mutref c, oe.sval)
+        val el = cl_iconst(c.bld, oe.sval.len())
+        val vp = sConst(mutref c, e.sval)
+        val vl = cl_iconst(c.bld, e.sval.len())
+        return rt5(mutref c, "fuse_rt_enum_variant", ep, el, vp, vl, cl_iconst(c.bld, 0))
+      }
+    }
+  }
+  val o = cgExpr(mutref c, oe)
+  rt3(mutref c, "fuse_rt_field", o, sConst(mutref c, e.sval), cl_iconst(c.bld, e.sval.len()))
+}
+
+fn cgElvis(mutref c: Compiler, e: Node) -> Int {
+  val lv = cgExpr(mutref c, e.children.get(0))
+  val isn = rt1(mutref c, "fuse_rt_is_none", lv)
+  val rb = cl_block_new(c.bld)
+  val mb = cl_block_new(c.bld)
+  cl_block_append_param(c.bld, mb)
+  cl_brif(c.bld, isn, rb, mb)
+  val lA = [lv]
+  cl_jump(c.bld, mb, lA, 1)
+  cl_block_switch(c.bld, rb)
+  cl_block_seal(c.bld, rb)
+  val rv = cgExpr(mutref c, e.children.get(1))
+  val rA = [rv]
+  cl_jump(c.bld, mb, rA, 1)
+  cl_block_switch(c.bld, mb)
+  cl_block_seal(c.bld, mb)
+  cl_block_param(c.bld, mb, 0)
+}
+
+fn cgOptChain(mutref c: Compiler, e: Node) -> Int {
+  val v = cgExpr(mutref c, e.children.get(0))
+  val isn = rt1(mutref c, "fuse_rt_is_none", v)
+  val ab = cl_block_new(c.bld)
+  val mb = cl_block_new(c.bld)
+  cl_block_append_param(c.bld, mb)
+  val nv = rt0(mutref c, "fuse_rt_none")
+  cl_brif(c.bld, isn, mb, ab)
+  val nA = [nv]
+  cl_jump(c.bld, mb, nA, 1)
+  cl_block_switch(c.bld, ab)
+  cl_block_seal(c.bld, ab)
+  val iss = rt1(mutref c, "fuse_rt_is_some", v)
+  val ub = cl_block_new(c.bld)
+  val db = cl_block_new(c.bld)
+  val fm = cl_block_new(c.bld)
+  cl_block_append_param(c.bld, fm)
+  cl_brif(c.bld, iss, ub, db)
+  cl_block_switch(c.bld, ub)
+  cl_block_seal(c.bld, ub)
+  val uw = rt1(mutref c, "fuse_rt_unwrap_enum", v)
+  val uwA = [uw]
+  cl_jump(c.bld, fm, uwA, 1)
+  cl_block_switch(c.bld, db)
+  cl_block_seal(c.bld, db)
+  val vA = [v]
+  cl_jump(c.bld, fm, vA, 1)
+  cl_block_switch(c.bld, fm)
+  cl_block_seal(c.bld, fm)
+  val inner = cl_block_param(c.bld, fm, 0)
+  val res = rt3(mutref c, "fuse_rt_safe_field", inner, sConst(mutref c, e.sval), cl_iconst(c.bld, e.sval.len()))
+  val rA = [res]
+  cl_jump(c.bld, mb, rA, 1)
+  cl_block_switch(c.bld, mb)
+  cl_block_seal(c.bld, mb)
+  cl_block_param(c.bld, mb, 0)
+}
+
+fn cgQuestion(mutref c: Compiler, e: Node) -> Int {
+  val v = cgExpr(mutref c, e.children.get(0))
+  val ok = rt1(mutref c, "fuse_rt_is_ok", v)
+  val sm = rt1(mutref c, "fuse_rt_is_some", v)
+  val success = cl_iadd(c.bld, ok, sm)
+  val ub = cl_block_new(c.bld)
+  val rb = cl_block_new(c.bld)
+  cl_brif(c.bld, success, ub, rb)
+  cl_block_switch(c.bld, rb)
+  cl_block_seal(c.bld, rb)
+  cl_return(c.bld, v)
+  c.terminated = true
+  val nb = cl_block_new(c.bld)
+  cl_block_switch(c.bld, nb)
+  cl_block_seal(c.bld, nb)
+  c.terminated = false
+  cl_block_switch(c.bld, ub)
+  cl_block_seal(c.bld, ub)
+  rt1(mutref c, "fuse_rt_unwrap_enum", v)
+}
+
+fn cgFStr(mutref c: Compiler, e: Node) -> Int {
+  val parts = e.sval.split("\x01")
+  var r = makeStr(mutref c, "")
+  for p in parts {
+    if p.len() > 0 {
+      if p.charAt(0) == "L" {
+        r = rt2(mutref c, "fuse_rt_add", r, makeStr(mutref c, p.substring(1, p.len())))
+      } else if p.charAt(0) == "E" {
+        val toks = tokenize(p.substring(1, p.len()))
+        var sp = newParser(toks)
+        val pv = cgExpr(mutref c, sp.parseExpr())
+        r = rt2(mutref c, "fuse_rt_add", r, rt1(mutref c, "fuse_rt_to_display_string", pv))
+      }
+    }
+  }
+  r
+}
+
+fn cgLambda(mutref c: Compiler, e: Node) -> Int {
+  val ln = f"fuse_lambda_{c.lamCount}"
+  c.lamCount = c.lamCount + 1
+  val h = cl_declare_func(c.ctx, ln, ln.len(), 2, 1)
+  c.funcs.push(RegFunc(ln, h, 2, 1))
+  c.pendingLams.push(e)
+  cl_func_addr(c.ctx, c.bld, h)
+}
+
+fn cgCall(mutref c: Compiler, e: Node) -> Int {
+  val callee = e.children.get(0)
+  if callee.kind == "Field" { return cgMethodCall(mutref c, callee, e) }
+  var args: List<Int> = []
+  var i = 1
+  loop {
+    if i >= e.children.len() { i = i }  // break
+    else { args.push(cgExpr(mutref c, e.children.get(i)))
+  i = i + 1
+  i = i - 1 }
+    i = i + 1
+    if i > e.children.len() { i = e.children.len() + 1 }
+    if i > e.children.len() { return cgCallInner(mutref c, callee, args) }
+  }
+}
+
+fn cgCallInner(mutref c: Compiler, callee: Node, args: List<Int>) -> Int {
+  if callee.kind == "Ident" {
+    val n = callee.sval
+    if n == "println" and args.len() > 0 { rt1(mutref c, "fuse_rt_println", args.get(0))
+  return rt0(mutref c, "fuse_rt_unit") }
+    if n == "eprintln" and args.len() > 0 { rt1(mutref c, "fuse_rt_eprintln", args.get(0))
+  return rt0(mutref c, "fuse_rt_unit") }
+    if n == "exit" and args.len() > 0 { rt1(mutref c, "fuse_rt_exit", rt1(mutref c, "fuse_rt_as_int", args.get(0)))
+  return rt0(mutref c, "fuse_rt_unit") }
+    if n == "panic" and args.len() > 0 { rt1(mutref c, "fuse_rt_eprintln", args.get(0))
+  rt1(mutref c, "fuse_rt_exit", cl_iconst(c.bld, 1))
+  return rt0(mutref c, "fuse_rt_unit") }
+    if n == "Ok" and args.len() > 0 { return rt1(mutref c, "fuse_rt_ok", args.get(0)) }
+    if n == "Err" and args.len() > 0 { return rt1(mutref c, "fuse_rt_err", args.get(0)) }
+    if n == "Some" and args.len() > 0 { return rt1(mutref c, "fuse_rt_some", args.get(0)) }
+    // Struct/DC construction
+    for st in c.structs { if st.sval == n { return cgStructCon(mutref c, n, args, st) } }
+    for dc in c.dcs { if dc.sval == n { return cgStructCon(mutref c, n, args, dc) } }
+    // Function call
+    val m = f"fuse_{n}"
+    val h = findFunc(c, m)
+    if h >= 0 { return cl_call(c.ctx, c.bld, h, args, args.len()) }
+  }
+  rt0(mutref c, "fuse_rt_unit")
+}
+
+fn cgStructCon(mutref c: Compiler, name: String, args: List<Int>, decl: Node) -> Int {
+  val obj = rt2(mutref c, "fuse_rt_struct_new", sConst(mutref c, name), cl_iconst(c.bld, name.len()))
+  val fns = getFieldNames(decl)
+  var i = 0
+  loop {
+    if i >= args.len() or i >= fns.len() { i = args.len() + fns.len() }
+    else {
+      rt4(mutref c, "fuse_rt_struct_set_field", obj, sConst(mutref c, fns.get(i)), cl_iconst(c.bld, fns.get(i).len()), args.get(i))
+      i = i + 1
+      i = i - 1
+    }
+    i = i + 1
+    if i > args.len() + fns.len() {
+      // Set __del__ if applicable
+      for dn in c.delFns { if dn == name { rt3(mutref c, "fuse_rt_struct_set_del", obj, sConst(mutref c, "__del__"), cl_iconst(c.bld, 7)) } }
+      return obj
+    }
+  }
+}
+
+fn cgMethodCall(mutref c: Compiler, callee: Node, e: Node) -> Int {
+  val oe = callee.children.get(0)
+  val mn = callee.sval
+  var args: List<Int> = []
+  var i = 1
+  loop {
+    if i >= e.children.len() { i = e.children.len() + 1 }
+    else { args.push(cgExpr(mutref c, e.children.get(i)))
+  i = i + 1
+  i = i - 1 }
+    i = i + 1
+    if i > e.children.len() { return cgMethodInner(mutref c, oe, mn, args) }
+  }
+}
+
+fn cgMethodInner(mutref c: Compiler, oe: Node, mn: String, args: List<Int>) -> Int {
+  // Check enum variant with args
+  if oe.kind == "Ident" {
+    for en in c.enums {
+      if en.sval == oe.sval {
+        for v in en.children {
+          if v.sval == mn and v.children.len() > 0 {
+            var payload = cl_iconst(c.bld, 0)
+            if args.len() > 0 { payload = args.get(0) }
+            return rt5(mutref c, "fuse_rt_enum_variant", sConst(mutref c, oe.sval), cl_iconst(c.bld, oe.sval.len()), sConst(mutref c, mn), cl_iconst(c.bld, mn.len()), payload)
+          }
+        }
+      }
+    }
+  }
+  val obj = cgExpr(mutref c, oe)
+  if mn == "len" { return rt1(mutref c, "fuse_rt_len", obj) }
+  if mn == "get" and args.len() > 0 { return rt2(mutref c, "fuse_rt_list_get", obj, args.get(0)) }
+  if mn == "push" and args.len() > 0 { rt2(mutref c, "fuse_rt_list_push", obj, args.get(0))
+  return rt0(mutref c, "fuse_rt_unit") }
+  if mn == "set" and args.len() >= 2 { rt3(mutref c, "fuse_rt_list_set", obj, args.get(0), args.get(1))
+  return rt0(mutref c, "fuse_rt_unit") }
+  if mn == "contains" and args.len() > 0 { return rt2(mutref c, "fuse_rt_contains", obj, args.get(0)) }
+  if mn == "first" { return rt1(mutref c, "fuse_rt_list_first", obj) }
+  if mn == "last" { return rt1(mutref c, "fuse_rt_list_last", obj) }
+  if mn == "sum" { return rt1(mutref c, "fuse_rt_list_sum", obj) }
+  if mn == "sorted" { return rt1(mutref c, "fuse_rt_list_sorted", obj) }
+  if mn == "isEmpty" { return rt1(mutref c, "fuse_rt_list_is_empty", obj) }
+  if mn == "charAt" and args.len() > 0 { return rt2(mutref c, "fuse_rt_str_char_at", obj, args.get(0)) }
+  if mn == "substring" and args.len() >= 2 { return rt3(mutref c, "fuse_rt_str_substring", obj, args.get(0), args.get(1)) }
+  if mn == "startsWith" and args.len() > 0 { return rt2(mutref c, "fuse_rt_str_starts_with", obj, args.get(0)) }
+  if mn == "charCodeAt" and args.len() > 0 { return rt2(mutref c, "fuse_rt_str_char_code_at", obj, args.get(0)) }
+  if mn == "split" and args.len() > 0 { return rt2(mutref c, "fuse_rt_str_split", obj, args.get(0)) }
+  if mn == "trim" { return rt1(mutref c, "fuse_rt_str_trim", obj) }
+  if mn == "replace" and args.len() >= 2 { return rt3(mutref c, "fuse_rt_str_replace", obj, args.get(0), args.get(1)) }
+  if mn == "toUpper" { return rt1(mutref c, "fuse_rt_str_to_upper", obj) }
+  if mn == "toLower" { return rt1(mutref c, "fuse_rt_str_to_lower", obj) }
+  if mn == "toFloat" { return rt1(mutref c, "fuse_rt_int_to_float", obj) }
+  if mn == "toString" { return rt1(mutref c, "fuse_rt_to_display_string", obj) }
+  if mn == "isEven" { return rt1(mutref c, "fuse_rt_int_is_even", obj) }
+  if mn == "map" and args.len() > 0 { return rt3(mutref c, "fuse_rt_list_map_fn", obj, args.get(0), cl_iconst(c.bld, 0)) }
+  if mn == "filter" and args.len() > 0 { return rt3(mutref c, "fuse_rt_list_filter_fn", obj, args.get(0), cl_iconst(c.bld, 0)) }
+  if mn == "retainWhere" and args.len() > 0 { rt3(mutref c, "fuse_rt_list_retain_fn", obj, args.get(0), cl_iconst(c.bld, 0))
+  return rt0(mutref c, "fuse_rt_unit") }
+  // Extension function search
+  var all: List<Int> = [obj]
+  for a in args { all.push(a) }
+  for f in c.funcs {
+    if f.name.contains(f"_{mn}") and f.name.startsWith("fuse_ext_") {
+      return cl_call(c.ctx, c.bld, f.handle, all, all.len())
+    }
+  }
+  rt0(mutref c, "fuse_rt_unit")
+}
+
+fn cgMatch(mutref c: Compiler, e: Node) -> Int {
+  val sv = cgExpr(mutref c, e.children.get(0))
+  val mb = cl_block_new(c.bld)
+  cl_block_append_param(c.bld, mb)
+  var i = 1
+  loop {
+    if i >= e.children.len() {
+      cl_block_switch(c.bld, mb)
+      cl_block_seal(c.bld, mb)
+      return cl_block_param(c.bld, mb, 0)
+    }
+    val arm = e.children.get(i)
+    val pat = arm.children.get(0)
+    val body = arm.children.get(1)
+    val last = i == e.children.len() - 1
+    val bb = cl_block_new(c.bld)
+    val next = cl_block_new(c.bld)
+    if pat.kind == "PW" { cl_jump(c.bld, bb, 0, 0) }
+    else if pat.kind == "PI" {
+      if pat.sval.contains(".") or pat.sval == "None" {
+        val vs = rt1(mutref c, "fuse_rt_variant_name", sv)
+        var en = pat.sval
+        if en == "None" { en = "Option.None" }
+        val eq = rt1(mutref c, "fuse_rt_is_truthy", rt2(mutref c, "fuse_rt_eq", vs, makeStr(mutref c, en)))
+        if last { cl_jump(c.bld, bb, 0, 0) } else { cl_brif(c.bld, eq, bb, next) }
+      } else { defVar(mutref c, pat.sval, sv)
+  cl_jump(c.bld, bb, 0, 0) }
+    } else if pat.kind == "PC" {
+      val vs = rt1(mutref c, "fuse_rt_variant_name", sv)
+      var mn = pat.sval
+      if mn == "Ok" { mn = "Result.Ok" }
+      if mn == "Err" { mn = "Result.Err" }
+      if mn == "Some" { mn = "Option.Some" }
+      val eq = rt1(mutref c, "fuse_rt_is_truthy", rt2(mutref c, "fuse_rt_eq", vs, makeStr(mutref c, mn)))
+      if last { cl_jump(c.bld, bb, 0, 0) } else { cl_brif(c.bld, eq, bb, next) }
+    } else if pat.kind == "PN" or pat.kind == "PS" or pat.kind == "PB" {
+      var lv = rt0(mutref c, "fuse_rt_unit")
+      if pat.kind == "PN" { lv = rt1(mutref c, "fuse_rt_int", cl_iconst(c.bld, pat.ival)) }
+      if pat.kind == "PS" { lv = makeStr(mutref c, pat.sval) }
+      if pat.kind == "PB" { lv = rt1(mutref c, "fuse_rt_bool", cl_iconst_i8(c.bld, when { pat.bval => 1 else => 0 })) }
+      val eq = rt1(mutref c, "fuse_rt_is_truthy", rt2(mutref c, "fuse_rt_eq", sv, lv))
+      if last { cl_jump(c.bld, bb, 0, 0) } else { cl_brif(c.bld, eq, bb, next) }
+    } else { cl_jump(c.bld, bb, 0, 0) }
+    cl_block_switch(c.bld, bb)
+    cl_block_seal(c.bld, bb)
+    if pat.kind == "PC" and pat.children.len() > 0 {
+      val inner = rt1(mutref c, "fuse_rt_unwrap_enum", sv)
+      cgBindSub(mutref c, pat.children, inner)
+    }
+    val bv = cgExpr(mutref c, body)
+    if not c.terminated { val bA = [bv]
+  cl_jump(c.bld, mb, bA, 1) }
+    c.terminated = false
+    if not last { cl_block_switch(c.bld, next)
+  cl_block_seal(c.bld, next) }
+    i = i + 1
+  }
+}
+
+fn cgBindSub(mutref c: Compiler, pats: List<Node>, v: Int) {
+  for p in pats {
+    if p.kind == "PI" { defVar(mutref c, p.sval, v) }
+    else if p.kind == "PC" and p.children.len() > 0 {
+      cgBindSub(mutref c, p.children, rt1(mutref c, "fuse_rt_unwrap_enum", v))
+    }
+  }
+}
+
+fn cgWhen(mutref c: Compiler, e: Node) -> Int {
+  val mb = cl_block_new(c.bld)
+  cl_block_append_param(c.bld, mb)
+  for arm in e.children {
+    if arm.kind == "WE" {
+      val v = cgExpr(mutref c, arm.children.get(0))
+      if not c.terminated { val vA = [v]
+  cl_jump(c.bld, mb, vA, 1)
+  c.terminated = true }
+    } else {
+      val cv = cgExpr(mutref c, arm.children.get(0))
+      val tr = rt1(mutref c, "fuse_rt_is_truthy", cv)
+      val bb = cl_block_new(c.bld)
+      val nb = cl_block_new(c.bld)
+      cl_brif(c.bld, tr, bb, nb)
+      cl_block_switch(c.bld, bb)
+      cl_block_seal(c.bld, bb)
+      val v = cgExpr(mutref c, arm.children.get(1))
+      if not c.terminated { val vA = [v]
+  cl_jump(c.bld, mb, vA, 1) }
+      c.terminated = false
+      cl_block_switch(c.bld, nb)
+      cl_block_seal(c.bld, nb)
+    }
+  }
+  if not c.terminated { val u = rt0(mutref c, "fuse_rt_unit")
+  val uA = [u]
+  cl_jump(c.bld, mb, uA, 1) }
+  c.terminated = false
+  cl_block_switch(c.bld, mb)
+  cl_block_seal(c.bld, mb)
+  cl_block_param(c.bld, mb, 0)
+}
+
+// ── Statement codegen ──
+
+fn cgStmts(mutref c: Compiler, ss: List<Node>) -> Int {
+  var last = rt0(mutref c, "fuse_rt_unit")
+  for s in ss { if not c.terminated { val r = cgStmt(mutref c, s)
+  if r >= 0 { last = r } } }
+  last
+}
+
+fn cgStmt(mutref c: Compiler, s: Node) -> Int {
+  if s.kind == "Val" or s.kind == "Var" { defVar(mutref c, s.sval, cgExpr(mutref c, s.children.get(0)))
+  return -1 }
+  if s.kind == "ValTuple" {
+    val v = cgExpr(mutref c, s.children.get(0))
+    var i = 0
+    for n in s.children.get(1).children {
+      defVar(mutref c, n.sval, rt2(mutref c, "fuse_rt_list_get", v, rt1(mutref c, "fuse_rt_int", cl_iconst(c.bld, i))))
+      i = i + 1
+    }
+    return -1
+  }
+  if s.kind == "Assign" {
+    val tgt = s.children.get(0)
+    val v = cgExpr(mutref c, s.children.get(1))
+    if tgt.kind == "Ident" {
+      var vi = c.vars.len() - 1
+      loop {
+        if vi < 0 { return -1 }
+        if c.vars.get(vi).name == tgt.sval { cl_var_def(c.bld, c.vars.get(vi).handle, v)
+  return -1 }
+        vi = vi - 1
+      }
+    }
+    if tgt.kind == "Field" {
+      rt4(mutref c, "fuse_rt_set_field", cgExpr(mutref c, tgt.children.get(0)), sConst(mutref c, tgt.sval), cl_iconst(c.bld, tgt.sval.len()), v)
+    }
+    return -1
+  }
+  if s.kind == "ExprStmt" { return cgExpr(mutref c, s.children.get(0)) }
+  if s.kind == "Return" {
+    var v = rt0(mutref c, "fuse_rt_unit")
+    if s.children.len() > 0 { v = cgExpr(mutref c, s.children.get(0)) }
+    cgEmitDefers(mutref c)
+    cl_return(c.bld, v)
+    c.terminated = true
+    cl_block_switch(c.bld, cl_block_new(c.bld))
+    cl_block_seal(c.bld, cl_block_new(c.bld))
+    c.terminated = false
+    return -1
+  }
+  if s.kind == "If" { return cgIf(mutref c, s) }
+  if s.kind == "For" { return cgFor(mutref c, s) }
+  if s.kind == "Defer" { c.defers.push(s.children.get(0))
+  return -1 }
+  -1
+}
+
+fn cgEmitDefers(mutref c: Compiler) {
+  var i = c.defers.len() - 1
+  loop { if i < 0 { return }
+  cgExpr(mutref c, c.defers.get(i))
+  i = i - 1 }
+}
+
+fn cgIf(mutref c: Compiler, s: Node) -> Int {
+  val cv = cgExpr(mutref c, s.children.get(0))
+  val tr = rt1(mutref c, "fuse_rt_is_truthy", cv)
+  val tb = cl_block_new(c.bld)
+  val eb = cl_block_new(c.bld)
+  val mb = cl_block_new(c.bld)
+  cl_block_append_param(c.bld, mb)
+  cl_brif(c.bld, tr, tb, eb)
+  cl_block_switch(c.bld, tb)
+  cl_block_seal(c.bld, tb)
+  c.terminated = false
+  val tv = cgStmts(mutref c, s.children.get(1).children)
+  if not c.terminated { val tA = [tv]
+  cl_jump(c.bld, mb, tA, 1) }
+  c.terminated = false
+  cl_block_switch(c.bld, eb)
+  cl_block_seal(c.bld, eb)
+  val en = s.children.get(2)
+  var ev = rt0(mutref c, "fuse_rt_unit")
+  if en.children.len() > 0 {
+    val fe = en.children.get(0)
+    if fe.kind == "If" { ev = cgIf(mutref c, fe) } else { ev = cgStmts(mutref c, en.children) }
+  }
+  if not c.terminated { val eA = [ev]
+  cl_jump(c.bld, mb, eA, 1) }
+  c.terminated = false
+  cl_block_switch(c.bld, mb)
+  cl_block_seal(c.bld, mb)
+  cl_block_param(c.bld, mb, 0)
+}
+
+fn cgFor(mutref c: Compiler, s: Node) -> Int {
+  val list = cgExpr(mutref c, s.children.get(0))
+  val len = rt1(mutref c, "fuse_rt_as_int", rt1(mutref c, "fuse_rt_list_len", list))
+  val cv = cl_var_declare(c.bld)
+  cl_var_def(c.bld, cv, cl_iconst(c.bld, 0))
+  val hdr = cl_block_new(c.bld)
+  val bdy = cl_block_new(c.bld)
+  val ext = cl_block_new(c.bld)
+  cl_jump(c.bld, hdr, 0, 0)
+  cl_block_switch(c.bld, hdr)
+  val ci = cl_var_use(c.bld, cv)
+  cl_brif(c.bld, cl_icmp(c.bld, 2, ci, len), bdy, ext)
+  cl_block_switch(c.bld, bdy)
+  cl_block_seal(c.bld, bdy)
+  c.terminated = false
+  defVar(mutref c, s.sval, rt2(mutref c, "fuse_rt_list_get", list, rt1(mutref c, "fuse_rt_int", ci)))
+  cgStmts(mutref c, s.children.get(1).children)
+  if not c.terminated { cl_var_def(c.bld, cv, cl_iadd_imm(c.bld, cl_var_use(c.bld, cv), 1))
+  cl_jump(c.bld, hdr, 0, 0) }
+  c.terminated = false
+  cl_block_seal(c.bld, hdr)
+  cl_block_switch(c.bld, ext)
+  cl_block_seal(c.bld, ext)
+  -1
+}
+
+
+// =============================================================================
+// Section 8: Compile program and generate main
+// =============================================================================
+
+fn compileProg(mutref c: Compiler, prog: Node) {
+  // Collect declarations
+  for d in prog.children {
+    if d.kind == "EnumDecl" { c.enums.push(d) }
+    if d.kind == "StructDecl" {
+      c.structs.push(d)
+      for m in d.items { if m.sval.split("|").get(0) == "__del__" { c.delFns.push(d.sval) } }
+    }
+    if d.kind == "DataClassDecl" {
+      c.dcs.push(d)
+      for m in d.items { if m.sval.split("|").get(0) == "__del__" { c.delFns.push(d.sval) } }
+    }
+    if d.kind == "FnDecl" {
+      val info = d.sval.split("|")
+      if info.get(1) != "" { c.extFns.push(d) }
+    }
+  }
+  // Declare all functions
+  for d in prog.children {
+    if d.kind == "FnDecl" {
+      val info = d.sval.split("|")
+      var mN = f"fuse_{info.get(0)}"
+      var pc = d.children.len()
+      if info.get(1) != "" {
+        mN = f"fuse_ext_{info.get(1)}_{info.get(0)}"
+        pc = d.children.len()
+        for p in d.children { if p.sval.split("|").get(1) == "self" { pc = pc - 1 } }
+        pc = pc + 1
+      }
+      val h = cl_declare_func(c.ctx, mN, mN.len(), pc, 1)
+      c.funcs.push(RegFunc(mN, h, pc, 1))
+    }
+  }
+  // Compile all functions
+  for d in prog.children { if d.kind == "FnDecl" { cgFnDecl(mutref c, d) } }
+  // Compile pending lambdas
+  loop {
+    if c.pendingLams.len() == 0 { return }
+    val lams = c.pendingLams
+    c.pendingLams = []
+    var li = 0
+    for lam in lams { cgLamBody(mutref c, lam, li)
+  li = li + 1 }
+  }
+}
+
+fn cgFnDecl(mutref c: Compiler, d: Node) {
+  val info = d.sval.split("|")
+  var mN = f"fuse_{info.get(0)}"
+  var pc = d.children.len()
+  if info.get(1) != "" {
+    mN = f"fuse_ext_{info.get(1)}_{info.get(0)}"
+    pc = d.children.len()
+    for p in d.children { if p.sval.split("|").get(1) == "self" { pc = pc - 1 } }
+    pc = pc + 1
+  }
+  val h = findFunc(c, mN)
+  if h < 0 { return }
+  val sv = c.vars
+  val sd = c.defers
+  c.vars = []
+  c.defers = []
+  c.terminated = false
+  c.bld = cl_func_begin(c.ctx, h, pc, 1)
+  val entry = cl_func_entry(c.bld)
+  var pi = 0
+  if info.get(1) != "" { defVar(mutref c, "self", cl_block_param(c.bld, entry, pi))
+  pi = pi + 1 }
+  for p in d.children {
+    val pn = p.sval.split("|").get(1)
+    if pn == "self" {
+      if info.get(1) != "" { pi = pi } else { defVar(mutref c, "self", cl_block_param(c.bld, entry, pi))
+  pi = pi + 1 }
+    } else { defVar(mutref c, pn, cl_block_param(c.bld, entry, pi))
+  pi = pi + 1 }
+  }
+  if info.get(2) == "expr" {
+    val v = cgExpr(mutref c, d.items.get(0))
+    if not c.terminated { cgEmitDefers(mutref c)
+  cl_return(c.bld, v) }
+  } else {
+    val v = cgStmts(mutref c, d.items)
+    if not c.terminated { cgEmitDefers(mutref c)
+  cl_return(c.bld, v) }
+  }
+  cl_finalize(c.bld)
+  cl_func_finish(c.ctx, c.bld, h)
+  c.vars = sv
+  c.defers = sd
+}
+
+fn cgLamBody(mutref c: Compiler, lam: Node, idx: Int) {
+  val base = c.lamCount - c.pendingLams.len() - 1
+  val ln = f"fuse_lambda_{base + idx}"
+  val h = findFunc(c, ln)
+  if h < 0 { return }
+  val sv = c.vars
+  val sd = c.defers
+  c.vars = []
+  c.defers = []
+  c.terminated = false
+  c.bld = cl_func_begin(c.ctx, h, 2, 1)
+  val entry = cl_func_entry(c.bld)
+  val arg = cl_block_param(c.bld, entry, 1)
+  val ps = lam.children.get(0)
+  if ps.children.len() > 0 { defVar(mutref c, ps.children.get(0).sval, arg) }
+  val v = cgStmts(mutref c, lam.children.get(1).children)
+  if not c.terminated { cl_return(c.bld, v) }
+  cl_finalize(c.bld)
+  cl_func_finish(c.ctx, c.bld, h)
+  c.vars = sv
+  c.defers = sd
+}
+
+fn cgMain(mutref c: Compiler, prog: Node) {
+  var en = ""
+  for d in prog.children {
+    if d.kind == "FnDecl" and d.bval { en = f"fuse_{d.sval.split(\"|\").get(0)}" }
+  }
+  if en == "" { return }
+  val mh = cl_declare_func(c.ctx, "main", 4, 0, 1)
+  c.funcs.push(RegFunc("main", mh, 0, 1))
+  val sv = c.vars
+  c.vars = []
+  c.terminated = false
+  c.bld = cl_func_begin(c.ctx, mh, 0, 1)
+  val entry = cl_func_entry(c.bld)
+  val eh = findFunc(c, en)
+  val result = cl_call(c.ctx, c.bld, eh, 0, 0)
+  val isErr = rt1(mutref c, "fuse_rt_is_err", result)
+  val errB = cl_block_new(c.bld)
+  val okB = cl_block_new(c.bld)
+  cl_brif(c.bld, isErr, errB, okB)
+  cl_block_switch(c.bld, errB)
+  cl_block_seal(c.bld, errB)
+  rt1(mutref c, "fuse_rt_eprintln", rt1(mutref c, "fuse_rt_unwrap_enum", result))
+  cl_return(c.bld, cl_iconst(c.bld, 1))
+  cl_block_switch(c.bld, okB)
+  cl_block_seal(c.bld, okB)
+  cl_return(c.bld, cl_iconst(c.bld, 0))
+  cl_finalize(c.bld)
+  cl_func_finish(c.ctx, c.bld, mh)
+  c.vars = sv
+}
+
+
+// =============================================================================
+// Section 9: Entry point
+// =============================================================================
+
+@entrypoint
+fn main() -> Result<(), String> {
+  val cmdArgs = args()
+  var sourceFile = ""
+  var outputFile = ""
+  var i = 1
+  loop {
+    if i >= cmdArgs.len() { i = cmdArgs.len() + 1 }
+    else {
+      val arg = cmdArgs.get(i)
+      if arg == "-o" and i + 1 < cmdArgs.len() { i = i + 1
+  outputFile = cmdArgs.get(i) }
+      else if sourceFile == "" { sourceFile = arg }
+      i = i + 1
+      i = i - 1
+    }
+    i = i + 1
+    if i > cmdArgs.len() + 1 {
+      if sourceFile == "" { eprintln("Usage: fusec2 <file.fuse> [-o output]")
+  exit(1) }
+      if outputFile == "" { outputFile = sourceFile.replace(".fuse", "") }
+      val source = readFile(sourceFile)?
+      val tokens = tokenize(source)
+      var parser = newParser(tokens)
+      val program = parser.parseProgram()
+      var compiler = newCompiler()
+      importAllRt(mutref compiler)
+      compileProg(mutref compiler, program)
+      cgMain(mutref compiler, program)
+      val objPath = f"{outputFile}.o"
+      cl_module_finish(compiler.ctx, objPath, objPath.len())
+      // TODO: link step — for now, just produce the object file
+      eprintln(f"Compiled: {objPath}")
+      return Ok(())
+    }
+  }
+}

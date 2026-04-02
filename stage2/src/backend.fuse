@@ -1,0 +1,211 @@
+
+
+// =============================================================================
+// Section 5: Extern FFI declarations
+// =============================================================================
+
+extern fn cl_module_new() -> Ptr
+extern fn cl_module_finish(ctx: Ptr, path: Ptr, pathLen: Int) -> Int
+extern fn cl_declare_func(ctx: Ptr, name: Ptr, nameLen: Int, paramCount: Int, hasRet: Int) -> Int
+extern fn cl_import_func(ctx: Ptr, name: Ptr, nameLen: Int, paramCount: Int, hasRet: Int) -> Int
+extern fn cl_func_begin(ctx: Ptr, funcHandle: Int, paramCount: Int, hasRet: Int) -> Ptr
+extern fn cl_func_entry(bld: Ptr) -> Int
+extern fn cl_func_finish(ctx: Ptr, bld: Ptr, funcHandle: Int) -> Int
+extern fn cl_iconst(bld: Ptr, v: Int) -> Int
+extern fn cl_f64const(bld: Ptr, v: Float) -> Int
+extern fn cl_iconst_i8(bld: Ptr, v: Int) -> Int
+extern fn cl_call(ctx: Ptr, bld: Ptr, funcHandle: Int, args: Ptr, argCount: Int) -> Int
+extern fn cl_return(bld: Ptr, v: Int) -> ()
+extern fn cl_jump(bld: Ptr, target: Int, args: Ptr, argCount: Int) -> ()
+extern fn cl_brif(bld: Ptr, cond: Int, thenBlock: Int, elseBlock: Int) -> ()
+extern fn cl_block_new(bld: Ptr) -> Int
+extern fn cl_block_switch(bld: Ptr, block: Int) -> ()
+extern fn cl_block_seal(bld: Ptr, block: Int) -> ()
+extern fn cl_block_append_param(bld: Ptr, block: Int) -> Int
+extern fn cl_block_param(bld: Ptr, block: Int, idx: Int) -> Int
+extern fn cl_seal_all(bld: Ptr) -> ()
+extern fn cl_finalize(bld: Ptr) -> ()
+extern fn cl_var_declare(bld: Ptr) -> Int
+extern fn cl_var_def(bld: Ptr, varHandle: Int, v: Int) -> ()
+extern fn cl_var_use(bld: Ptr, varHandle: Int) -> Int
+extern fn cl_iadd(bld: Ptr, a: Int, b: Int) -> Int
+extern fn cl_isub(bld: Ptr, a: Int, b: Int) -> Int
+extern fn cl_imul(bld: Ptr, a: Int, b: Int) -> Int
+extern fn cl_icmp(bld: Ptr, cc: Int, a: Int, b: Int) -> Int
+extern fn cl_iadd_imm(bld: Ptr, a: Int, imm: Int) -> Int
+extern fn cl_data_create(ctx: Ptr, data: Ptr, dataLen: Int) -> Int
+extern fn cl_data_addr(ctx: Ptr, bld: Ptr, dataHandle: Int) -> Int
+extern fn cl_func_addr(ctx: Ptr, bld: Ptr, funcHandle: Int) -> Int
+extern fn cl_link(objPath: Ptr, objPathLen: Int, outPath: Ptr, outPathLen: Int, libPath: Ptr, libPathLen: Int) -> Int
+
+
+// =============================================================================
+// Section 6: Compiler state and helpers
+// =============================================================================
+
+data class RegFunc(val name: String, val handle: Int, val params: Int, val hasRet: Int)
+data class StrData(val s: String, val handle: Int)
+
+data class Compiler(
+  var ctx: Ptr, var bld: Ptr,
+  var funcs: List<RegFunc>, var strings: List<StrData>, var strCount: Int,
+  var vars: List<RegFunc>, var varCount: Int, var terminated: Bool,
+  var defers: List<Node>, var lamCount: Int, var pendingLams: List<Node>,
+  var enums: List<Node>, var structs: List<Node>, var dcs: List<Node>,
+  var extFns: List<Node>, var delFns: List<String>
+)
+
+fn newCompiler() -> Compiler {
+  Compiler(cl_module_new(), 0, [], [], 0, [], 0, false, [], 0, [], [], [], [], [], [])
+}
+
+fn findFunc(c: Compiler, name: String) -> Int {
+  for f in c.funcs { if f.name == name { return f.handle } }
+  -1
+}
+
+fn defVar(mutref c: Compiler, name: String, v: Int) {
+  val h = cl_var_declare(c.bld)
+  cl_var_def(c.bld, h, v)
+  c.vars.push(RegFunc(name, h, 0, 0))
+}
+
+fn useVar(c: Compiler, name: String) -> Int {
+  var i = c.vars.len() - 1
+  loop {
+    if i < 0 { return -1 }
+    if c.vars.get(i).name == name { return cl_var_use(c.bld, c.vars.get(i).handle) }
+    i = i - 1
+  }
+}
+
+fn internStr(mutref c: Compiler, s: String) -> Int {
+  for sd in c.strings { if sd.s == s { return sd.handle } }
+  val h = cl_data_create(c.ctx, s, s.len())
+  c.strings.push(StrData(s, h))
+  h
+}
+
+fn sConst(mutref c: Compiler, s: String) -> Int {
+  val dh = internStr(mutref c, s)
+  cl_data_addr(c.ctx, c.bld, dh)
+}
+
+fn makeStr(mutref c: Compiler, s: String) -> Int {
+  val p = sConst(mutref c, s)
+  val l = cl_iconst(c.bld, s.len())
+  val h = findFunc(c, "fuse_rt_str")
+  val a = [p, l]
+  cl_call(c.ctx, c.bld, h, a, 2)
+}
+
+fn rt0(mutref c: Compiler, n: String) -> Int {
+  cl_call(c.ctx, c.bld, findFunc(c, n), 0, 0)
+}
+fn rt1(mutref c: Compiler, n: String, a: Int) -> Int {
+  val args = [a]
+  cl_call(c.ctx, c.bld, findFunc(c, n), args, 1)
+}
+fn rt2(mutref c: Compiler, n: String, a: Int, b: Int) -> Int {
+  val args = [a, b]
+  cl_call(c.ctx, c.bld, findFunc(c, n), args, 2)
+}
+fn rt3(mutref c: Compiler, n: String, a: Int, b: Int, d: Int) -> Int {
+  val args = [a, b, d]
+  cl_call(c.ctx, c.bld, findFunc(c, n), args, 3)
+}
+fn rt4(mutref c: Compiler, n: String, a: Int, b: Int, d: Int, e: Int) -> Int {
+  val args = [a, b, d, e]
+  cl_call(c.ctx, c.bld, findFunc(c, n), args, 4)
+}
+fn rt5(mutref c: Compiler, n: String, a: Int, b: Int, d: Int, e: Int, f: Int) -> Int {
+  val args = [a, b, d, e, f]
+  cl_call(c.ctx, c.bld, findFunc(c, n), args, 5)
+}
+
+fn importRt(mutref c: Compiler, n: String, pc: Int, hr: Int) {
+  val h = cl_import_func(c.ctx, n, n.len(), pc, hr)
+  c.funcs.push(RegFunc(n, h, pc, hr))
+}
+
+fn importAllRt(mutref c: Compiler) {
+  importRt(mutref c, "fuse_rt_int", 1, 1)
+  importRt(mutref c, "fuse_rt_float", 1, 1)
+  importRt(mutref c, "fuse_rt_bool", 1, 1)
+  importRt(mutref c, "fuse_rt_str", 2, 1)
+  importRt(mutref c, "fuse_rt_unit", 0, 1)
+  importRt(mutref c, "fuse_rt_list_new", 0, 1)
+  importRt(mutref c, "fuse_rt_none", 0, 1)
+  importRt(mutref c, "fuse_rt_as_int", 1, 1)
+  importRt(mutref c, "fuse_rt_as_float", 1, 1)
+  importRt(mutref c, "fuse_rt_as_bool", 1, 1)
+  importRt(mutref c, "fuse_rt_is_truthy", 1, 1)
+  importRt(mutref c, "fuse_rt_add", 2, 1)
+  importRt(mutref c, "fuse_rt_sub", 2, 1)
+  importRt(mutref c, "fuse_rt_mul", 2, 1)
+  importRt(mutref c, "fuse_rt_div", 2, 1)
+  importRt(mutref c, "fuse_rt_mod", 2, 1)
+  importRt(mutref c, "fuse_rt_neg", 1, 1)
+  importRt(mutref c, "fuse_rt_eq", 2, 1)
+  importRt(mutref c, "fuse_rt_ne", 2, 1)
+  importRt(mutref c, "fuse_rt_lt", 2, 1)
+  importRt(mutref c, "fuse_rt_gt", 2, 1)
+  importRt(mutref c, "fuse_rt_le", 2, 1)
+  importRt(mutref c, "fuse_rt_ge", 2, 1)
+  importRt(mutref c, "fuse_rt_println", 1, 0)
+  importRt(mutref c, "fuse_rt_eprintln", 1, 0)
+  importRt(mutref c, "fuse_rt_ok", 1, 1)
+  importRt(mutref c, "fuse_rt_err", 1, 1)
+  importRt(mutref c, "fuse_rt_some", 1, 1)
+  importRt(mutref c, "fuse_rt_is_ok", 1, 1)
+  importRt(mutref c, "fuse_rt_is_err", 1, 1)
+  importRt(mutref c, "fuse_rt_is_some", 1, 1)
+  importRt(mutref c, "fuse_rt_is_none", 1, 1)
+  importRt(mutref c, "fuse_rt_unwrap_enum", 1, 1)
+  importRt(mutref c, "fuse_rt_enum_variant", 5, 1)
+  importRt(mutref c, "fuse_rt_struct_new", 2, 1)
+  importRt(mutref c, "fuse_rt_struct_set_field", 4, 0)
+  importRt(mutref c, "fuse_rt_struct_set_del", 3, 0)
+  importRt(mutref c, "fuse_rt_field", 3, 1)
+  importRt(mutref c, "fuse_rt_set_field", 4, 0)
+  importRt(mutref c, "fuse_rt_safe_field", 3, 1)
+  importRt(mutref c, "fuse_rt_clone", 1, 1)
+  importRt(mutref c, "fuse_rt_drop", 1, 0)
+  importRt(mutref c, "fuse_rt_len", 1, 1)
+  importRt(mutref c, "fuse_rt_contains", 2, 1)
+  importRt(mutref c, "fuse_rt_to_display_string", 1, 1)
+  importRt(mutref c, "fuse_rt_variant_name", 1, 1)
+  importRt(mutref c, "fuse_rt_str_char_at", 2, 1)
+  importRt(mutref c, "fuse_rt_str_substring", 3, 1)
+  importRt(mutref c, "fuse_rt_str_starts_with", 2, 1)
+  importRt(mutref c, "fuse_rt_str_char_code_at", 2, 1)
+  importRt(mutref c, "fuse_rt_str_split", 2, 1)
+  importRt(mutref c, "fuse_rt_str_trim", 1, 1)
+  importRt(mutref c, "fuse_rt_str_replace", 3, 1)
+  importRt(mutref c, "fuse_rt_str_to_upper", 1, 1)
+  importRt(mutref c, "fuse_rt_str_to_lower", 1, 1)
+  importRt(mutref c, "fuse_rt_from_char_code", 1, 1)
+  importRt(mutref c, "fuse_rt_list_get", 2, 1)
+  importRt(mutref c, "fuse_rt_list_set", 3, 0)
+  importRt(mutref c, "fuse_rt_list_push", 2, 0)
+  importRt(mutref c, "fuse_rt_list_contains", 2, 1)
+  importRt(mutref c, "fuse_rt_list_first", 1, 1)
+  importRt(mutref c, "fuse_rt_list_last", 1, 1)
+  importRt(mutref c, "fuse_rt_list_sum", 1, 1)
+  importRt(mutref c, "fuse_rt_list_sorted", 1, 1)
+  importRt(mutref c, "fuse_rt_list_is_empty", 1, 1)
+  importRt(mutref c, "fuse_rt_list_len", 1, 1)
+  importRt(mutref c, "fuse_rt_list_map_fn", 3, 1)
+  importRt(mutref c, "fuse_rt_list_filter_fn", 3, 1)
+  importRt(mutref c, "fuse_rt_list_retain_fn", 3, 0)
+  importRt(mutref c, "fuse_rt_int_to_float", 1, 1)
+  importRt(mutref c, "fuse_rt_int_to_string", 1, 1)
+  importRt(mutref c, "fuse_rt_int_is_even", 1, 1)
+  importRt(mutref c, "fuse_rt_float_to_string", 1, 1)
+  importRt(mutref c, "fuse_rt_exit", 1, 0)
+  importRt(mutref c, "fuse_rt_args", 0, 1)
+  importRt(mutref c, "fuse_rt_read_file", 2, 1)
+  importRt(mutref c, "fuse_rt_parse_int", 2, 1)
+  importRt(mutref c, "fuse_rt_parse_float", 2, 1)
+  importRt(mutref c, "fuse_rt_panic", 2, 0)
+}

@@ -1355,6 +1355,15 @@ fn link(obj_path: &str, output_path: &str) {
     let rt = candidates.iter().find(|p| p.exists())
         .expect("fuse-runtime static library not found — run `cargo build -p fuse-runtime` first");
 
+    // Also find cranelift-ffi library if it exists (needed for Stage 2 compiler).
+    let cl_ffi_candidates = [
+        base.join("target/release/cranelift_ffi.lib"),
+        base.join("target/release/libcranelift_ffi.a"),
+        base.join("target/debug/cranelift_ffi.lib"),
+        base.join("target/debug/libcranelift_ffi.a"),
+    ];
+    let cl_ffi = cl_ffi_candidates.iter().find(|p| p.exists());
+
     let out = if cfg!(windows) && !output_path.ends_with(".exe") {
         format!("{output_path}.exe")
     } else {
@@ -1362,13 +1371,13 @@ fn link(obj_path: &str, output_path: &str) {
     };
 
     if cfg!(target_env = "msvc") {
-        link_msvc(obj_path, rt.to_str().unwrap(), &out);
+        link_msvc(obj_path, rt.to_str().unwrap(), cl_ffi.map(|p| p.to_str().unwrap()), &out);
     } else {
-        link_gcc(obj_path, rt.to_str().unwrap(), &out);
+        link_gcc(obj_path, rt.to_str().unwrap(), cl_ffi.map(|p| p.to_str().unwrap()), &out);
     }
 }
 
-fn link_msvc(obj_path: &str, rt_path: &str, output_path: &str) {
+fn link_msvc(obj_path: &str, rt_path: &str, cl_ffi: Option<&str>, output_path: &str) {
     // Use `rustc -C linker-flavor=msvc` as a linker driver.
     // We create a trivial .rs file whose only purpose is to give rustc
     // something to compile, then inject our object file and runtime lib
@@ -1384,14 +1393,18 @@ fn link_msvc(obj_path: &str, rt_path: &str, output_path: &str) {
     let obj_abs = std::fs::canonicalize(obj_path).unwrap_or_else(|_| obj_path.into());
     let rt_abs = std::fs::canonicalize(rt_path).unwrap_or_else(|_| rt_path.into());
 
-    let result = std::process::Command::new("rustc")
-        .arg("--edition=2021")
+    let mut cmd = std::process::Command::new("rustc");
+    cmd.arg("--edition=2021")
         .arg("--crate-type=bin")
         .arg(stub_path.to_str().unwrap())
         .arg("-o").arg(output_path)
         .arg("-C").arg(format!("link-arg={}", obj_abs.display()))
-        .arg("-C").arg(format!("link-arg={}", rt_abs.display()))
-        .status();
+        .arg("-C").arg(format!("link-arg={}", rt_abs.display()));
+    if let Some(cl) = cl_ffi {
+        let cl_abs = std::fs::canonicalize(cl).unwrap_or_else(|_| cl.into());
+        cmd.arg("-C").arg(format!("link-arg={}", cl_abs.display()));
+    }
+    let result = cmd.status();
 
     let _ = std::fs::remove_file(&stub_path);
 
@@ -1408,10 +1421,12 @@ fn link_msvc(obj_path: &str, rt_path: &str, output_path: &str) {
     }
 }
 
-fn link_gcc(obj_path: &str, rt_path: &str, output_path: &str) {
+fn link_gcc(obj_path: &str, rt_path: &str, cl_ffi: Option<&str>, output_path: &str) {
     let linker = if cfg!(windows) { "gcc" } else { "cc" };
     let mut cmd = std::process::Command::new(linker);
-    cmd.arg(obj_path).arg(rt_path).arg("-o").arg(output_path);
+    cmd.arg(obj_path).arg(rt_path);
+    if let Some(cl) = cl_ffi { cmd.arg(cl); }
+    cmd.arg("-o").arg(output_path);
 
     if cfg!(target_os = "linux") {
         cmd.arg("-lpthread").arg("-ldl").arg("-lm");
