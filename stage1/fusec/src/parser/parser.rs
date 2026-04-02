@@ -101,6 +101,7 @@ impl Parser {
             Tok::Enum => Ok(Decl::Enum(self.enum_decl(anns)?)),
             Tok::Struct => Ok(Decl::Struct(self.struct_decl(anns)?)),
             Tok::Ident(s) if s == "data" => Ok(Decl::DataClass(self.data_class_decl(anns)?)),
+            Tok::Extern => self.extern_decl(),
             Tok::Val => { let d = self.val_decl()?; Ok(Decl::TopVal { name: d.0, ty: d.2, value: d.3, annotations: anns, span: d.4 }) }
             Tok::Var => { let d = self.var_decl()?; Ok(Decl::TopVar { name: d.0, ty: d.1, value: d.2, annotations: anns, span: d.3 }) }
             _ => Err(self.err("expected declaration")),
@@ -150,6 +151,53 @@ impl Parser {
                  else if name == "self" { Some(TypeExpr::Simple("Self".into(), span.clone())) }
                  else { return Err(self.err("expected ':' after parameter name")); };
         Ok(Param { convention: conv, name, ty, span })
+    }
+
+    // ── extern ───────────────────────────────────────────────────────
+    fn extern_decl(&mut self) -> Result<Decl, FuseError> {
+        let span = self.span();
+        self.expect(&Tok::Extern, "extern")?;
+        // extern fn name(...) -> Type
+        if self.at(&Tok::Fn) {
+            let ef = self.extern_fn_decl()?;
+            return Ok(Decl::ExternFn(ef));
+        }
+        // extern "lib" { fn ...; fn ...; }
+        if let Tok::Str(lib) = self.peek().clone() {
+            self.pos += 1;
+            self.expect(&Tok::LBrace, "extern block")?;
+            let mut fns = Vec::new();
+            while !self.at(&Tok::RBrace) {
+                self.expect(&Tok::Fn, "extern fn")?;
+                fns.push(self.extern_fn_params()?);
+            }
+            self.expect(&Tok::RBrace, "extern block")?;
+            return Ok(Decl::ExternBlock { lib, fns, span });
+        }
+        Err(self.err("expected 'fn' or string after 'extern'"))
+    }
+
+    fn extern_fn_decl(&mut self) -> Result<ExternFnDecl, FuseError> {
+        self.expect(&Tok::Fn, "extern fn")?;
+        self.extern_fn_params()
+    }
+
+    fn extern_fn_params(&mut self) -> Result<ExternFnDecl, FuseError> {
+        let span = self.span();
+        let name = self.expect_ident("extern fn name")?;
+        self.expect(&Tok::LParen, "extern fn")?;
+        let mut params = Vec::new();
+        if !self.at(&Tok::RParen) {
+            params.push(self.param()?);
+            while self.eat(&Tok::Comma) { params.push(self.param()?); }
+        }
+        self.expect(&Tok::RParen, "extern fn")?;
+        let ret_ty = if self.eat(&Tok::Arrow) {
+            Some(self.type_expr()?)
+        } else {
+            None
+        };
+        Ok(ExternFnDecl { name, params, ret_ty, span })
     }
 
     // ── enum ─────────────────────────────────────────────────────────

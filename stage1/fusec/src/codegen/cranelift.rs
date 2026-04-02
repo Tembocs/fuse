@@ -29,6 +29,8 @@ pub struct Codegen {
     pending_lambdas: Vec<(String, Vec<String>, Vec<HirStmt>)>,
     /// Type name → mangled __del__ function name (for ASAP destruction).
     del_fns: HashMap<String, String>,
+    /// Extern function name → (param types, has return).
+    extern_sigs: HashMap<String, (Vec<HirType>, HirType)>,
 }
 
 impl Codegen {
@@ -49,12 +51,14 @@ impl Codegen {
             lambda_counter: 0,
             pending_lambdas: Vec::new(),
             del_fns: HashMap::new(),
+            extern_sigs: HashMap::new(),
         }
     }
 
     pub fn compile(mut self, program: &HirProgram, output_path: &str) {
         self.import_runtime_fns();
         self.declare_fuse_fns(program);
+        self.import_extern_fns(program);
 
         // Build del_fns map: type_name → mangled __del__ name.
         for d in &program.decls {
@@ -131,6 +135,46 @@ impl Codegen {
         }
     }
 
+    fn import_extern_fns(&mut self, program: &HirProgram) {
+        let cc = self.module.isa().default_call_conv();
+        for d in &program.decls {
+            if let HirDecl::ExternFn(ef) = d {
+                // Skip if already imported by the runtime.
+                if self.rt_fns.contains_key(&ef.name) {
+                    let id = *self.rt_fns.get(&ef.name).unwrap();
+                    self.fuse_fns.insert(format!("fuse_{}", ef.name), id);
+                    let param_types: Vec<HirType> = ef.params.iter().map(|p| p.ty.clone()).collect();
+                    self.extern_sigs.insert(ef.name.clone(), (param_types, ef.ret_ty.clone()));
+                    continue;
+                }
+                // Map FFI param types to Cranelift types.
+                let mut sig = Signature::new(cc);
+                for p in &ef.params {
+                    let ct = match &p.ty {
+                        HirType::Int => types::I64,
+                        HirType::Float => types::F64,
+                        HirType::Bool => types::I8,
+                        _ => PTR_TYPE,
+                    };
+                    sig.params.push(AbiParam::new(ct));
+                }
+                match &ef.ret_ty {
+                    HirType::Unit => {}
+                    HirType::Int => { sig.returns.push(AbiParam::new(types::I64)); }
+                    HirType::Float => { sig.returns.push(AbiParam::new(types::F64)); }
+                    HirType::Bool => { sig.returns.push(AbiParam::new(types::I8)); }
+                    _ => { sig.returns.push(AbiParam::new(PTR_TYPE)); }
+                }
+                let id = self.module.declare_function(&ef.name, Linkage::Import, &sig)
+                    .expect(&format!("import extern fn {}", ef.name));
+                let param_types: Vec<HirType> = ef.params.iter().map(|p| p.ty.clone()).collect();
+                self.extern_sigs.insert(ef.name.clone(), (param_types, ef.ret_ty.clone()));
+                self.fuse_fns.insert(format!("fuse_{}", ef.name), id);
+                self.rt_fns.insert(ef.name.clone(), id);
+            }
+        }
+    }
+
     fn declare_fuse_fns(&mut self, program: &HirProgram) {
         let cc = self.module.isa().default_call_conv();
         for d in &program.decls {
@@ -189,7 +233,7 @@ impl Codegen {
             b.seal_block(entry);
 
             {
-                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas, &self.del_fns);
+                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas, &self.del_fns, &self.extern_sigs);
                 let bp: Vec<Value> = ctx.b.block_params(entry).to_vec();
                 let _env = bp[0]; // captured env (unused for now)
                 let arg = bp[1];  // the argument value
@@ -246,7 +290,7 @@ impl Codegen {
             b.seal_block(entry);
 
             {
-                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas, &self.del_fns);
+                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas, &self.del_fns, &self.extern_sigs);
                 let params: Vec<Value> = ctx.b.block_params(entry).to_vec();
 
                 let mut pi = 0;
@@ -383,6 +427,8 @@ struct FnGen<'a, 'b> {
     pending_lambdas: &'a mut Vec<(String, Vec<String>, Vec<HirStmt>)>,
     /// Type name → mangled __del__ function name.
     del_fns: &'a HashMap<String, String>,
+    /// Extern function sigs for unboxing args.
+    extern_sigs: &'a HashMap<String, (Vec<HirType>, HirType)>,
     /// Variables that have __del__ methods: (var_name, type_name).
     destructibles: Vec<(String, String)>,
     /// Variables already destroyed by ASAP (don't double-destroy).
@@ -400,11 +446,12 @@ impl<'a, 'b> FnGen<'a, 'b> {
         lambda_counter: &'a mut usize,
         pending_lambdas: &'a mut Vec<(String, Vec<String>, Vec<HirStmt>)>,
         del_fns: &'a HashMap<String, String>,
+        extern_sigs: &'a HashMap<String, (Vec<HirType>, HirType)>,
     ) -> Self {
         Self { b, module, fuse_fns, rt_fns, string_data, str_counter,
                vars: HashMap::new(), next_var: 0, terminated: false,
                defers: Vec::new(), lambda_counter, pending_lambdas,
-               del_fns, destructibles: Vec::new(), destroyed: std::collections::HashSet::new() }
+               del_fns, extern_sigs, destructibles: Vec::new(), destroyed: std::collections::HashSet::new() }
     }
 
     fn def(&mut self, name: &str, val: Value) {
@@ -433,7 +480,12 @@ impl<'a, 'b> FnGen<'a, 'b> {
         if let Some(&id) = self.fuse_fns.get(mangled) {
             let r = self.module.declare_func_in_func(id, self.b.func);
             let c = self.b.ins().call(r, args);
-            self.b.inst_results(c)[0]
+            let results = self.b.inst_results(c);
+            if results.is_empty() {
+                self.rt("fuse_rt_unit", &[])
+            } else {
+                results[0]
+            }
         } else {
             self.rt("fuse_rt_unit", &[])
         }
@@ -979,6 +1031,30 @@ impl<'a, 'b> FnGen<'a, 'b> {
                 "exit" => { let v = avs.into_iter().next().unwrap_or_else(|| { let z = self.b.ins().iconst(types::I64, 0); self.rt("fuse_rt_int", &[z]) }); let ci = self.rt("fuse_rt_as_int", &[v]); self.rt_void("fuse_rt_exit", &[ci]); return self.rt("fuse_rt_unit", &[]); }
                 "panic" => { let v = avs.into_iter().next().unwrap_or_else(|| self.make_str("")); self.rt_void("fuse_rt_eprintln", &[v]); let o = self.b.ins().iconst(types::I64, 1); self.rt_void("fuse_rt_exit", &[o]); return self.rt("fuse_rt_unit", &[]); }
                 _ => {}
+            }
+            // Check if this is an extern function — needs arg unboxing.
+            if let Some((param_types, ret_type)) = self.extern_sigs.get(name).cloned() {
+                let mut raw_args = Vec::new();
+                for (i, av) in avs.iter().enumerate() {
+                    let pt = param_types.get(i).unwrap_or(&HirType::Ptr);
+                    let raw = match pt {
+                        HirType::Int => self.rt("fuse_rt_as_int", &[*av]),
+                        HirType::Float => self.rt("fuse_rt_as_float", &[*av]),
+                        HirType::Bool => self.rt("fuse_rt_as_bool", &[*av]),
+                        _ => *av, // Ptr types pass through as-is
+                    };
+                    raw_args.push(raw);
+                }
+                let m = format!("fuse_{name}");
+                let raw_result = self.call_fuse(&m, &raw_args);
+                // Box the return value.
+                return match ret_type {
+                    HirType::Int => self.rt("fuse_rt_int", &[raw_result]),
+                    HirType::Float => self.rt("fuse_rt_float", &[raw_result]),
+                    HirType::Bool => self.rt("fuse_rt_bool", &[raw_result]),
+                    HirType::Unit => self.rt("fuse_rt_unit", &[]),
+                    _ => raw_result, // Ptr returns are already boxed
+                };
             }
             let m = format!("fuse_{name}");
             if self.fuse_fns.contains_key(&m) { return self.call_fuse(&m, &avs); }

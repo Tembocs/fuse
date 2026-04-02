@@ -316,12 +316,22 @@ pub struct HirDataClassDecl {
     pub span: Span,
 }
 
+/// An extern function declaration (FFI).
+#[derive(Debug, Clone)]
+pub struct HirExternFnDecl {
+    pub name: String,
+    pub params: Vec<HirParam>,
+    pub ret_ty: HirType,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub enum HirDecl {
     Fn(HirFnDecl),
     Enum(HirEnumDecl),
     Struct(HirStructDecl),
     DataClass(HirDataClassDecl),
+    ExternFn(HirExternFnDecl),
     TopVal {
         name: String,
         ty: HirType,

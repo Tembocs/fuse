@@ -691,3 +691,86 @@ pub extern "C" fn fuse_rt_panic(msg: *const u8, len: i64) {
     eprintln!("Fuse panic: {s}");
     std::process::exit(1);
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// Platform abstraction — file I/O, processes, paths
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Write data to a file. Returns Result (Ok(()) or Err(message)).
+#[no_mangle]
+pub extern "C" fn fuse_rt_write_file(
+    path_ptr: *const u8, path_len: i64,
+    data_ptr: *const u8, data_len: i64,
+) -> *mut FuseValue {
+    let path = unsafe { str_from_raw(path_ptr, path_len) };
+    let data = unsafe { slice::from_raw_parts(data_ptr, data_len as usize) };
+    match std::fs::write(&path, data) {
+        Ok(_) => box_val(FuseValue::ok(FuseValue::Unit)),
+        Err(e) => box_val(FuseValue::err(FuseValue::Str(e.to_string()))),
+    }
+}
+
+/// Run a subprocess. cmd and args are FuseValue strings.
+/// Returns Result<Int, String> (exit code or error).
+#[no_mangle]
+pub extern "C" fn fuse_rt_run_process(cmd: *mut FuseValue, args: *mut FuseValue) -> *mut FuseValue {
+    let cmd_str = unsafe { ref_val(cmd) }.as_str().to_string();
+    let arg_list = unsafe { ref_val(args) }.as_list().clone();
+    let arg_strs: Vec<String> = arg_list.iter().map(|a| format!("{a}")).collect();
+
+    match std::process::Command::new(&cmd_str).args(&arg_strs).status() {
+        Ok(status) => {
+            let code = status.code().unwrap_or(-1) as i64;
+            box_val(FuseValue::ok(FuseValue::Int(code)))
+        }
+        Err(e) => box_val(FuseValue::err(FuseValue::Str(e.to_string()))),
+    }
+}
+
+/// Get current working directory as String.
+#[no_mangle]
+pub extern "C" fn fuse_rt_getcwd() -> *mut FuseValue {
+    match std::env::current_dir() {
+        Ok(p) => box_val(FuseValue::Str(p.to_string_lossy().to_string())),
+        Err(_) => box_val(FuseValue::Str(".".to_string())),
+    }
+}
+
+/// Join two path components.
+#[no_mangle]
+pub extern "C" fn fuse_rt_path_join(
+    a_ptr: *const u8, a_len: i64,
+    b_ptr: *const u8, b_len: i64,
+) -> *mut FuseValue {
+    let a = unsafe { str_from_raw(a_ptr, a_len) };
+    let b = unsafe { str_from_raw(b_ptr, b_len) };
+    let joined = std::path::Path::new(&a).join(&b);
+    box_val(FuseValue::Str(joined.to_string_lossy().to_string()))
+}
+
+/// Check if a path exists.
+#[no_mangle]
+pub extern "C" fn fuse_rt_path_exists(path_ptr: *const u8, path_len: i64) -> i8 {
+    let path = unsafe { str_from_raw(path_ptr, path_len) };
+    if std::path::Path::new(&path).exists() { 1 } else { 0 }
+}
+
+/// Read an environment variable. Returns Option<String>.
+#[no_mangle]
+pub extern "C" fn fuse_rt_env_var(name_ptr: *const u8, name_len: i64) -> *mut FuseValue {
+    let name = unsafe { str_from_raw(name_ptr, name_len) };
+    match std::env::var(&name) {
+        Ok(val) => box_val(FuseValue::some(FuseValue::Str(val))),
+        Err(_) => box_val(FuseValue::none()),
+    }
+}
+
+/// Get monotonic time in milliseconds.
+#[no_mangle]
+pub extern "C" fn fuse_rt_time_ms() -> i64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as i64
+}

@@ -883,7 +883,60 @@ no longer required to build Fuse.
 
 ---
 
-## 13. Design Decisions
+## 13. Foreign Function Interface (FFI)
+
+Fuse programs can call C-compatible functions declared with `extern`. This is the bridge for accessing system libraries, the Fuse runtime, and code generation backends.
+
+### `extern fn` — declaring foreign functions
+
+```fuse
+extern fn fuse_rt_println(val: Ptr) -> ()
+extern fn fuse_rt_int(v: Int) -> Ptr
+extern fn fuse_rt_add(a: Ptr, b: Ptr) -> Ptr
+```
+
+Foreign functions are declared but not defined — the linker resolves them against linked libraries.
+
+### FFI types
+
+Three types exist only at FFI boundaries:
+
+| Type | Size | Purpose |
+|------|------|---------|
+| `Ptr` | 64-bit | Raw pointer — opaque handle to native memory |
+| `Byte` | 8-bit | Single byte — for raw buffers |
+| `Int`, `Float`, `Bool` | native | Passed directly as raw values, no boxing |
+
+`Ptr` is the primary FFI type. Fuse values are boxed behind `Ptr` at FFI boundaries — the runtime manages the actual types.
+
+### `extern` blocks
+
+Group related foreign functions:
+
+```fuse
+extern "fuse-runtime" {
+  fn fuse_rt_println(val: Ptr) -> ()
+  fn fuse_rt_int(v: Int) -> Ptr
+  fn fuse_rt_add(a: Ptr, b: Ptr) -> Ptr
+  fn fuse_rt_str(ptr: Ptr, len: Int) -> Ptr
+}
+```
+
+The library name `"fuse-runtime"` is a hint for documentation — the linker resolves symbols regardless.
+
+### Safety contract
+
+Extern functions bypass Fuse's ownership and type checking. The developer accepts responsibility for:
+
+- Correct argument types and counts
+- Memory management of raw pointers
+- Thread safety of foreign calls
+
+FFI is a boundary, not an escape hatch. Wrap foreign calls in safe Fuse functions and expose only the safe API to the rest of the program.
+
+---
+
+## 14. Design Decisions
 
 Each decision is recorded in three lines: the decision, the rationale, and the
 alternatives that were considered and rejected. No entry is longer than this.
@@ -999,6 +1052,16 @@ that become permanent. Each stage is complete when its stated milestone is met.
 **Rejected:** Milestone dates (pressure without information), sprint planning
 (wrong granularity for language design), versioned release schedule (premature
 for a pre-Stage-1 language).
+
+---
+
+**ADR-011** · FFI uses `extern fn`, not annotations or attributes
+
+**Decision:** Foreign functions are declared with `extern fn name(...)`, not `@foreign fn name(...)` or `#[ffi] fn name(...)`.
+
+**Rationale:** `extern` is universally understood across C, Rust, Go, and C#. It communicates "this function is defined elsewhere" immediately. Annotations suggest the function has a Fuse body that is somehow modified, which is the opposite of what FFI does.
+
+**Rejected:** `@foreign` (annotation implies body exists), `native fn` (ambiguous with native code generation), `#[link]` (Rust-specific notation unfamiliar outside Rust).
 
 ---
 

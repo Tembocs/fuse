@@ -153,12 +153,23 @@ pub struct DataClassDecl {
     pub span: Span,
 }
 
+/// An extern function declaration (FFI).
+#[derive(Debug, Clone)]
+pub struct ExternFnDecl {
+    pub name: String,
+    pub params: Vec<Param>,
+    pub ret_ty: Option<TypeExpr>,
+    pub span: Span,
+}
+
 #[derive(Debug, Clone)]
 pub enum Decl {
     Fn(FnDecl),
     Enum(EnumDecl),
     Struct(StructDecl),
     DataClass(DataClassDecl),
+    ExternFn(ExternFnDecl),
+    ExternBlock { lib: String, fns: Vec<ExternFnDecl>, span: Span },
     TopVal { name: String, ty: Option<TypeExpr>, value: Expr, annotations: Vec<Annotation>, span: Span },
     TopVar { name: String, ty: Option<TypeExpr>, value: Expr, annotations: Vec<Annotation>, span: Span },
 }

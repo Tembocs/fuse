@@ -12,6 +12,7 @@ pub enum Tok {
     If, Else, For, In, Loop, Return, Defer,
     And, Or, Not, True, False, SelfKw,
     Spawn, Async, Await, Suspend,
+    Extern,
     // Operators
     Arrow, FatArrow, QuestionDot, Elvis, Question,
     At, Dot, DotDot, Colon, ColonColon,
@@ -52,6 +53,7 @@ pub fn keyword(s: &str) -> Option<Tok> {
         "self" => Tok::SelfKw,
         "spawn" => Tok::Spawn, "async" => Tok::Async,
         "await" => Tok::Await, "suspend" => Tok::Suspend,
+        "extern" => Tok::Extern,
         _ => return None,
     })
 }

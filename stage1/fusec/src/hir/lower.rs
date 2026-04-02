@@ -81,6 +81,14 @@ impl Lowerer {
                     hir_data_classes.push(hd.clone());
                     hir_decls.push(HirDecl::DataClass(hd));
                 }
+                Decl::ExternFn(ef) => {
+                    hir_decls.push(HirDecl::ExternFn(self.lower_extern_fn(ef)));
+                }
+                Decl::ExternBlock { fns, .. } => {
+                    for ef in fns {
+                        hir_decls.push(HirDecl::ExternFn(self.lower_extern_fn(ef)));
+                    }
+                }
                 Decl::TopVal { name, ty, value, span, .. } => {
                     let hv = self.lower_expr(value);
                     let ht = ty.as_ref().map(|t| self.lower_type_expr(t)).unwrap_or_else(|| hv.ty.clone());
@@ -276,6 +284,20 @@ impl Lowerer {
             has_value_annotation: d.annotations.iter().any(|a| a.name == "value"),
             del_method,
             span: d.span.clone(),
+        }
+    }
+
+    fn lower_extern_fn(&self, ef: &ExternFnDecl) -> HirExternFnDecl {
+        HirExternFnDecl {
+            name: ef.name.clone(),
+            params: ef.params.iter().map(|p| HirParam {
+                name: p.name.clone(),
+                convention: Convention::Default,
+                ty: p.ty.as_ref().map(|t| self.lower_type_expr(t)).unwrap_or(HirType::Unknown),
+                span: p.span.clone(),
+            }).collect(),
+            ret_ty: ef.ret_ty.as_ref().map(|t| self.lower_type_expr(t)).unwrap_or(HirType::Unit),
+            span: ef.span.clone(),
         }
     }
 

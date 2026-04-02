@@ -119,6 +119,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "cranelift-ffi"
+version = "0.1.0"
+dependencies = [
+ "cranelift",
+ "cranelift-module",
+ "cranelift-native",
+ "cranelift-object",
+ "target-lexicon",
+]
+
+[[package]]
 name = "cranelift-frontend"
 version = "0.116.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -208,4 +208,13 @@ pub static RT_FUNCTIONS: &[RtFuncInfo] = &[
     RtFuncInfo { name: "fuse_rt_parse_int",      params: &[PTR_TYPE, types::I64],  ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_parse_float",    params: &[PTR_TYPE, types::I64],  ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_panic",          params: &[PTR_TYPE, types::I64],  ret: None },
+
+    // Platform abstraction
+    RtFuncInfo { name: "fuse_rt_write_file",     params: &[PTR_TYPE, types::I64, PTR_TYPE, types::I64], ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_run_process",    params: &[PTR_TYPE, PTR_TYPE],  ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_getcwd",         params: &[],                    ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_path_join",      params: &[PTR_TYPE, types::I64, PTR_TYPE, types::I64], ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_path_exists",    params: &[PTR_TYPE, types::I64], ret: Some(types::I8) },
+    RtFuncInfo { name: "fuse_rt_env_var",        params: &[PTR_TYPE, types::I64], ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_time_ms",        params: &[],                    ret: Some(types::I64) },
 ];
