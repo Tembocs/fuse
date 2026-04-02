@@ -499,6 +499,59 @@ pub extern "C" fn fuse_rt_to_display_string(v: *mut FuseValue) -> *mut FuseValue
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// Generic method dispatch (type-aware)
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Generic `.len()` — works on both List and String.
+#[no_mangle]
+pub extern "C" fn fuse_rt_len(v: *mut FuseValue) -> *mut FuseValue {
+    let val = unsafe { ref_val(v) };
+    match val {
+        FuseValue::List(items) => box_val(FuseValue::Int(items.len() as i64)),
+        FuseValue::Str(s) => box_val(FuseValue::Int(s.len() as i64)),
+        _ => box_val(FuseValue::Int(0)),
+    }
+}
+
+/// Generic `.contains()` — works on both List and String.
+#[no_mangle]
+pub extern "C" fn fuse_rt_contains(v: *mut FuseValue, needle: *mut FuseValue) -> *mut FuseValue {
+    let val = unsafe { ref_val(v) };
+    let n = unsafe { ref_val(needle) };
+    match val {
+        FuseValue::List(items) => {
+            let found = items.iter().any(|item| item.fuse_eq(n));
+            box_val(FuseValue::Bool(found))
+        }
+        FuseValue::Str(s) => {
+            let found = s.contains(n.as_str());
+            box_val(FuseValue::Bool(found))
+        }
+        _ => box_val(FuseValue::Bool(false)),
+    }
+}
+
+/// Generic `.toString()` — works on any type.
+#[no_mangle]
+pub extern "C" fn fuse_rt_to_string(v: *mut FuseValue) -> *mut FuseValue {
+    let s = format!("{}", unsafe { ref_val(v) });
+    box_val(FuseValue::Str(s))
+}
+
+/// Enum variant name — returns the variant name as a string.
+#[no_mangle]
+pub extern "C" fn fuse_rt_variant_name(v: *mut FuseValue) -> *mut FuseValue {
+    let val = unsafe { ref_val(v) };
+    match val {
+        FuseValue::Enum(e) => {
+            let full = format!("{}.{}", e.enum_name, e.variant);
+            box_val(FuseValue::Str(full))
+        }
+        _ => box_val(FuseValue::Str(val.type_name().to_string())),
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // System
 // ═══════════════════════════════════════════════════════════════════════
 

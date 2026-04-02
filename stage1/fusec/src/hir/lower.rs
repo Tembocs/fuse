@@ -463,6 +463,20 @@ impl Lowerer {
                 self.lower_call(callee, args, span)
             }
             Expr::Field(obj, name, span) => {
+                // Check for EnumName.Variant pattern (no args — bare variant).
+                if let Expr::Ident(obj_name, _) = obj.as_ref() {
+                    if self.enums.contains_key(obj_name) {
+                        return HirExpr {
+                            kind: HirExprKind::EnumConstruct {
+                                enum_name: obj_name.clone(),
+                                variant: name.clone(),
+                                value: None,
+                            },
+                            ty: HirType::Enum(obj_name.clone()),
+                            span: span.clone(),
+                        };
+                    }
+                }
                 let ho = self.lower_expr(obj);
                 HirExpr {
                     kind: HirExprKind::Field(Box::new(ho), name.clone()),

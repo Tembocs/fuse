@@ -188,6 +188,12 @@ pub static RT_FUNCTIONS: &[RtFuncInfo] = &[
     RtFuncInfo { name: "fuse_rt_float_to_string", params: &[PTR_TYPE],             ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_to_display_string", params: &[PTR_TYPE],           ret: Some(PTR_TYPE) },
 
+    // Generic method dispatch
+    RtFuncInfo { name: "fuse_rt_len",            params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_contains",       params: &[PTR_TYPE, PTR_TYPE],     ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_to_string",      params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_variant_name",   params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
+
     // System
     RtFuncInfo { name: "fuse_rt_read_file",      params: &[PTR_TYPE, types::I64],  ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_args",           params: &[],                      ret: Some(PTR_TYPE) },

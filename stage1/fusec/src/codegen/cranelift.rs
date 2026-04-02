@@ -170,8 +170,10 @@ impl Codegen {
                     HirFnBody::Block(stmts) => ctx.stmts(stmts),
                     HirFnBody::Expr(e) => Some(ctx.expr(e)),
                 };
-                let rv = result.unwrap_or_else(|| ctx.rt("fuse_rt_unit", &[]));
-                ctx.b.ins().return_(&[rv]);
+                if !ctx.terminated {
+                    let rv = result.unwrap_or_else(|| ctx.rt("fuse_rt_unit", &[]));
+                    ctx.b.ins().return_(&[rv]);
+                }
             }
             // FnGen dropped — b is no longer borrowed.
             b.seal_all_blocks();
@@ -647,11 +649,11 @@ impl<'a, 'b> FnGen<'a, 'b> {
         let obj = self.expr(recv);
         let avs: Vec<Value> = args.iter().map(|a| self.expr(a)).collect();
         match method {
-            "len" => return self.rt("fuse_rt_list_len", &[obj]),
+            "len" => return self.rt("fuse_rt_len", &[obj]),
             "get" if !avs.is_empty() => return self.rt("fuse_rt_list_get", &[obj, avs[0]]),
             "push" if !avs.is_empty() => { self.rt_void("fuse_rt_list_push", &[obj, avs[0]]); return self.rt("fuse_rt_unit", &[]); }
             "set" if avs.len()>=2 => { self.rt_void("fuse_rt_list_set", &[obj, avs[0], avs[1]]); return self.rt("fuse_rt_unit", &[]); }
-            "contains" if !avs.is_empty() => return self.rt("fuse_rt_list_contains", &[obj, avs[0]]),
+            "contains" if !avs.is_empty() => return self.rt("fuse_rt_contains", &[obj, avs[0]]),
             "first" => return self.rt("fuse_rt_list_first", &[obj]),
             "last" => return self.rt("fuse_rt_list_last", &[obj]),
             "sum" => return self.rt("fuse_rt_list_sum", &[obj]),
@@ -742,14 +744,46 @@ impl<'a, 'b> FnGen<'a, 'b> {
             let bb = self.b.create_block();
             if !last { next = self.b.create_block(); }
             match &arm.pattern {
-                HirPattern::Wildcard(_) | HirPattern::Ident(_, _, _) => {
-                    if let HirPattern::Ident(n, _, _) = &arm.pattern { self.def(n, sv); }
+                HirPattern::Wildcard(_) => {
+                    self.b.ins().jump(bb, &[]);
+                }
+                HirPattern::Ident(n, _, _) if n.contains('.') => {
+                    // Dotted name like "FetchResult.NotFound" — treat as enum variant check.
+                    let variant_str = self.rt("fuse_rt_variant_name", &[sv]);
+                    let exp = self.make_str(n);
+                    let eq = self.rt("fuse_rt_eq", &[variant_str, exp]);
+                    let eqb = self.rt("fuse_rt_is_truthy", &[eq]);
+                    if last { self.b.ins().jump(bb, &[]); }
+                    else { self.b.ins().brif(eqb, bb, &[], next, &[]); }
+                }
+                HirPattern::Ident(n, _, _) if n == "None" => {
+                    // Special case: bare "None" is Option.None.
+                    let variant_str = self.rt("fuse_rt_variant_name", &[sv]);
+                    let exp = self.make_str("Option.None");
+                    let eq = self.rt("fuse_rt_eq", &[variant_str, exp]);
+                    let eqb = self.rt("fuse_rt_is_truthy", &[eq]);
+                    if last { self.b.ins().jump(bb, &[]); }
+                    else { self.b.ins().brif(eqb, bb, &[], next, &[]); }
+                }
+                HirPattern::Ident(n, _, _) => {
+                    // Regular identifier — binds subject to variable, always matches.
+                    self.def(n, sv);
                     self.b.ins().jump(bb, &[]);
                 }
                 HirPattern::Constructor(name, sub_pats, _, _) => {
-                    let exp = self.make_str(name);
-                    let tn = self.rt("fuse_rt_type_name", &[sv]);
-                    let eq = self.rt("fuse_rt_eq", &[tn, exp]);
+                    // Get the full variant name (e.g., "Result.Ok", "Option.Some", "MathError.DivisionByZero").
+                    let variant_str = self.rt("fuse_rt_variant_name", &[sv]);
+                    // The pattern name may be short ("Ok") or qualified ("MathError.DivisionByZero").
+                    // Try matching against full name and common prefixes.
+                    let candidates = match name.as_str() {
+                        "Ok" => vec!["Result.Ok".to_string()],
+                        "Err" => vec!["Result.Err".to_string()],
+                        "Some" => vec!["Option.Some".to_string()],
+                        "None" => vec!["Option.None".to_string()],
+                        _ => vec![name.clone()],
+                    };
+                    let exp = self.make_str(&candidates[0]);
+                    let eq = self.rt("fuse_rt_eq", &[variant_str, exp]);
                     let eqb = self.rt("fuse_rt_is_truthy", &[eq]);
                     if last { self.b.ins().jump(bb, &[]); }
                     else { self.b.ins().brif(eqb, bb, &[], next, &[]); }
@@ -792,7 +826,10 @@ impl<'a, 'b> FnGen<'a, 'b> {
         self.b.append_block_param(mb, FUSE_VALUE_TYPE);
         for arm in arms {
             match &arm.cond {
-                None => { let v = self.expr(&arm.body); if !self.terminated { self.b.ins().jump(mb, &[v]); } self.terminated = false; }
+                None => {
+                    let v = self.expr(&arm.body);
+                    if !self.terminated { self.b.ins().jump(mb, &[v]); self.terminated = true; }
+                }
                 Some(c) => {
                     let cv = self.expr(c);
                     let tr = self.rt("fuse_rt_is_truthy", &[cv]);
