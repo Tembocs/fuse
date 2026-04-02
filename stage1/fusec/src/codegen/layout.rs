@@ -194,6 +194,8 @@ pub static RT_FUNCTIONS: &[RtFuncInfo] = &[
     RtFuncInfo { name: "fuse_rt_list_retain_fn", params: &[PTR_TYPE, PTR_TYPE, PTR_TYPE], ret: None },
 
     // Generic method dispatch
+    RtFuncInfo { name: "fuse_rt_struct_set_del",  params: &[PTR_TYPE, PTR_TYPE, types::I64],  ret: None },
+    RtFuncInfo { name: "fuse_rt_safe_field",     params: &[PTR_TYPE, PTR_TYPE, types::I64], ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_len",            params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_contains",       params: &[PTR_TYPE, PTR_TYPE],     ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_to_string",      params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },

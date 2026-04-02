@@ -598,6 +598,36 @@ pub extern "C" fn fuse_rt_to_string(v: *mut FuseValue) -> *mut FuseValue {
     box_val(FuseValue::Str(s))
 }
 
+/// Set the __del__ function name on a struct so clone preserves it.
+#[no_mangle]
+pub extern "C" fn fuse_rt_struct_set_del(obj: *mut FuseValue, del_name: *const u8, del_len: i64) {
+    let name = unsafe { str_from_raw(del_name, del_len) };
+    if let FuseValue::Struct(ref mut s) = unsafe { mut_val(obj) } {
+        s.del_fn = Some(name);
+    }
+}
+
+/// Safe field access — returns None if the value is not a struct.
+#[no_mangle]
+pub extern "C" fn fuse_rt_safe_field(
+    obj: *mut FuseValue, field_name: *const u8, field_len: i64,
+) -> *mut FuseValue {
+    let val = unsafe { ref_val(obj) };
+    match val {
+        FuseValue::Struct(s) => {
+            let name = unsafe { str_from_raw(field_name, field_len) };
+            for (fname, fval) in &s.fields {
+                if fname == &name {
+                    return box_val(fval.clone());
+                }
+            }
+            box_val(FuseValue::none())
+        }
+        FuseValue::Unit => box_val(FuseValue::none()),
+        _ => box_val(FuseValue::none()),
+    }
+}
+
 /// Enum variant name — returns the variant name as a string.
 #[no_mangle]
 pub extern "C" fn fuse_rt_variant_name(v: *mut FuseValue) -> *mut FuseValue {

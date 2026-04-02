@@ -26,7 +26,9 @@ pub struct Codegen {
     str_counter: usize,
     lambda_counter: usize,
     /// Lambdas to compile (collected during function codegen, compiled after).
-    pending_lambdas: Vec<(String, Vec<String>, Vec<HirStmt>)>, // (mangled_name, params, body)
+    pending_lambdas: Vec<(String, Vec<String>, Vec<HirStmt>)>,
+    /// Type name → mangled __del__ function name (for ASAP destruction).
+    del_fns: HashMap<String, String>,
 }
 
 impl Codegen {
@@ -46,6 +48,7 @@ impl Codegen {
             str_counter: 0,
             lambda_counter: 0,
             pending_lambdas: Vec::new(),
+            del_fns: HashMap::new(),
         }
     }
 
@@ -53,16 +56,45 @@ impl Codegen {
         self.import_runtime_fns();
         self.declare_fuse_fns(program);
 
+        // Build del_fns map: type_name → mangled __del__ name.
+        for d in &program.decls {
+            match d {
+                HirDecl::Struct(s) => {
+                    if s.del_method.is_some() || s.methods.iter().any(|m| m.name == "__del__") {
+                        self.del_fns.insert(s.name.clone(), format!("fuse_ext_{}___del__", s.name));
+                    }
+                }
+                HirDecl::DataClass(dc) => {
+                    if dc.del_method.is_some() || dc.methods.iter().any(|m| m.name == "__del__") {
+                        self.del_fns.insert(dc.name.clone(), format!("fuse_ext_{}___del__", dc.name));
+                    }
+                }
+                _ => {}
+            }
+        }
+
         // Collect functions to compile.
         let fn_decls: Vec<HirFnDecl> = program.decls.iter().filter_map(|d| {
             if let HirDecl::Fn(f) = d { Some(f.clone()) } else { None }
         }).collect();
-        // Also collect struct/DC methods.
+        // Also collect struct/DC methods — set ext_type so they get the right mangled name.
         let mut method_decls: Vec<HirFnDecl> = Vec::new();
         for d in &program.decls {
             match d {
-                HirDecl::Struct(s) => method_decls.extend(s.methods.clone()),
-                HirDecl::DataClass(dc) => method_decls.extend(dc.methods.clone()),
+                HirDecl::Struct(s) => {
+                    for m in &s.methods {
+                        let mut mc = m.clone();
+                        mc.ext_type = Some(s.name.clone());
+                        method_decls.push(mc);
+                    }
+                }
+                HirDecl::DataClass(dc) => {
+                    for m in &dc.methods {
+                        let mut mc = m.clone();
+                        mc.ext_type = Some(dc.name.clone());
+                        method_decls.push(mc);
+                    }
+                }
                 _ => {}
             }
         }
@@ -109,14 +141,23 @@ impl Codegen {
         for d in &program.decls {
             match d {
                 HirDecl::Struct(s) => {
-                    for m in &s.methods { self.declare_one_fn(m, cc); }
+                    for m in &s.methods { self.declare_method(&s.name, m, cc); }
                 }
                 HirDecl::DataClass(dc) => {
-                    for m in &dc.methods { self.declare_one_fn(m, cc); }
+                    for m in &dc.methods { self.declare_method(&dc.name, m, cc); }
                 }
                 _ => {}
             }
         }
+    }
+
+    fn declare_method(&mut self, type_name: &str, f: &HirFnDecl, cc: isa::CallConv) {
+        let mangled = format!("fuse_ext_{}_{}", type_name, f.name);
+        let pc = f.params.iter().filter(|p| p.name != "self").count() + 1; // +1 for self
+        let sig = fuse_fn_sig(pc, cc);
+        let id = self.module.declare_function(&mangled, Linkage::Local, &sig)
+            .expect(&format!("declare method {}.{}", type_name, f.name));
+        self.fuse_fns.insert(mangled, id);
     }
 
     fn declare_one_fn(&mut self, f: &HirFnDecl, cc: isa::CallConv) {
@@ -148,7 +189,7 @@ impl Codegen {
             b.seal_block(entry);
 
             {
-                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas);
+                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas, &self.del_fns);
                 let bp: Vec<Value> = ctx.b.block_params(entry).to_vec();
                 let _env = bp[0]; // captured env (unused for now)
                 let arg = bp[1];  // the argument value
@@ -205,7 +246,7 @@ impl Codegen {
             b.seal_block(entry);
 
             {
-                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas);
+                let mut ctx = FnGen::new(&mut b, &mut self.module, &mut self.fuse_fns, &self.rt_fns, &mut self.string_data, &mut self.str_counter, &mut self.lambda_counter, &mut self.pending_lambdas, &self.del_fns);
                 let params: Vec<Value> = ctx.b.block_params(entry).to_vec();
 
                 let mut pi = 0;
@@ -219,10 +260,22 @@ impl Codegen {
                     } else if pi < params.len() {
                         ctx.def(&p.name, params[pi]); pi += 1;
                     }
+                    // Track owned parameters of destructible types for ASAP.
+                    if p.convention == Convention::Owned {
+                        let type_name = match &p.ty {
+                            HirType::Struct(n) | HirType::DataClass(n) => Some(n.clone()),
+                            _ => None,
+                        };
+                        if let Some(tn) = type_name {
+                            if ctx.del_fns.contains_key(&tn) {
+                                ctx.destructibles.push((p.name.clone(), tn));
+                            }
+                        }
+                    }
                 }
 
                 let result = match &f.body {
-                    HirFnBody::Block(stmts) => ctx.stmts(stmts),
+                    HirFnBody::Block(stmts) => ctx.stmts_asap(stmts),
                     HirFnBody::Expr(e) => Some(ctx.expr(e)),
                 };
                 if !ctx.terminated {
@@ -328,6 +381,12 @@ struct FnGen<'a, 'b> {
     lambda_counter: &'a mut usize,
     /// Pending lambdas to compile after the current function.
     pending_lambdas: &'a mut Vec<(String, Vec<String>, Vec<HirStmt>)>,
+    /// Type name → mangled __del__ function name.
+    del_fns: &'a HashMap<String, String>,
+    /// Variables that have __del__ methods: (var_name, type_name).
+    destructibles: Vec<(String, String)>,
+    /// Variables already destroyed by ASAP (don't double-destroy).
+    destroyed: std::collections::HashSet<String>,
 }
 
 impl<'a, 'b> FnGen<'a, 'b> {
@@ -340,10 +399,12 @@ impl<'a, 'b> FnGen<'a, 'b> {
         str_counter: &'a mut usize,
         lambda_counter: &'a mut usize,
         pending_lambdas: &'a mut Vec<(String, Vec<String>, Vec<HirStmt>)>,
+        del_fns: &'a HashMap<String, String>,
     ) -> Self {
         Self { b, module, fuse_fns, rt_fns, string_data, str_counter,
                vars: HashMap::new(), next_var: 0, terminated: false,
-               defers: Vec::new(), lambda_counter, pending_lambdas }
+               defers: Vec::new(), lambda_counter, pending_lambdas,
+               del_fns, destructibles: Vec::new(), destroyed: std::collections::HashSet::new() }
     }
 
     fn def(&mut self, name: &str, val: Value) {
@@ -378,6 +439,17 @@ impl<'a, 'b> FnGen<'a, 'b> {
         }
     }
 
+    /// Try to infer the type name from a construction expression.
+    fn infer_type_from_expr(&self, e: &HirExpr) -> Option<String> {
+        match &e.kind {
+            HirExprKind::StructConstruct { type_name, .. } => Some(type_name.clone()),
+            _ => match &e.ty {
+                HirType::Struct(n) | HirType::DataClass(n) => Some(n.clone()),
+                _ => None,
+            }
+        }
+    }
+
     fn cg_lambda_id(&mut self) -> usize {
         let id = *self.lambda_counter;
         *self.lambda_counter += 1;
@@ -408,19 +480,179 @@ impl<'a, 'b> FnGen<'a, 'b> {
     // ── Statements ─────────────────────────────────────────────────
 
     fn stmts(&mut self, ss: &[HirStmt]) -> Option<Value> {
+        self.stmts_inner(ss, false)
+    }
+
+    fn stmts_asap(&mut self, ss: &[HirStmt]) -> Option<Value> {
+        self.stmts_inner(ss, true)
+    }
+
+    fn stmts_inner(&mut self, ss: &[HirStmt], is_fn_body: bool) -> Option<Value> {
+        // Compute last-use for ASAP destruction.
+        let last_use = self.compute_last_use_map(ss);
+        // For function bodies, include params in ASAP. For nested blocks, only new vars.
+        let destr_start = if is_fn_body { 0 } else { self.destructibles.len() };
+
         let mut last = None;
-        for s in ss {
+        for (i, s) in ss.iter().enumerate() {
             if self.terminated { break; }
             last = self.stmt(s);
+
+            // ASAP destruction: call __del__ for variables defined in this scope
+            // whose last use was this statement.
+            if !self.terminated {
+                let to_destroy: Vec<(String, String)> = self.destructibles[destr_start..].iter()
+                    .filter(|(name, _)| last_use.get(name).copied() == Some(i) && !self.destroyed.contains(name))
+                    .cloned()
+                    .collect();
+                for (var_name, type_name) in &to_destroy {
+                    if let Some(del_mangled) = self.del_fns.get(type_name) {
+                        if let Some(&var) = self.vars.get(var_name) {
+                            if self.fuse_fns.contains_key(del_mangled) {
+                                let val = self.b.use_var(var);
+                                self.call_fuse(del_mangled, &[val]);
+                                self.destroyed.insert(var_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
         }
         last
     }
 
+    /// Compute last-use index for each variable referenced in a statement list.
+    fn compute_last_use_map(&self, ss: &[HirStmt]) -> HashMap<String, usize> {
+        let mut map: HashMap<String, usize> = HashMap::new();
+        for (i, s) in ss.iter().enumerate() {
+            // For defer statements, push last-use beyond the block so destruction
+            // happens after all non-deferred statements.
+            let idx = if matches!(s, HirStmt::Defer(..)) { ss.len() } else { i };
+            for name in self.collect_stmt_names(s) {
+                let e = map.entry(name).or_insert(0);
+                if idx > *e { *e = idx; }
+            }
+        }
+        map
+    }
+
+    fn collect_stmt_names(&self, s: &HirStmt) -> Vec<String> {
+        let mut names = Vec::new();
+        match s {
+            HirStmt::Val { name: _, value, .. } | HirStmt::Var { name: _, value, .. } =>
+                self.collect_expr_names(value, &mut names),
+            HirStmt::ValTuple { value, .. } =>
+                self.collect_expr_names(value, &mut names),
+            HirStmt::Assign { target, value, .. } => {
+                self.collect_expr_names(target, &mut names);
+                self.collect_expr_names(value, &mut names);
+            }
+            HirStmt::Expr(e) => self.collect_expr_names(e, &mut names),
+            HirStmt::Return(Some(e), _) | HirStmt::Defer(e, _) =>
+                self.collect_expr_names(e, &mut names),
+            HirStmt::If { cond, then_body, else_body, .. } => {
+                self.collect_expr_names(cond, &mut names);
+                for s in then_body { names.extend(self.collect_stmt_names(s)); }
+                if let Some(eb) = else_body {
+                    match eb {
+                        HirElseBody::ElseIf(s) => names.extend(self.collect_stmt_names(s)),
+                        HirElseBody::Block(ss) => { for s in ss { names.extend(self.collect_stmt_names(s)); } }
+                    }
+                }
+            }
+            HirStmt::For { iter, body, .. } => {
+                self.collect_expr_names(iter, &mut names);
+                for s in body { names.extend(self.collect_stmt_names(s)); }
+            }
+            HirStmt::Loop(body, _) => {
+                for s in body { names.extend(self.collect_stmt_names(s)); }
+            }
+            _ => {}
+        }
+        names
+    }
+
+    fn collect_expr_names(&self, e: &HirExpr, names: &mut Vec<String>) {
+        match &e.kind {
+            HirExprKind::Ident(n) => names.push(n.clone()),
+            HirExprKind::SelfExpr => names.push("self".into()),
+            HirExprKind::Binary(l, _, r) | HirExprKind::Elvis(l, r) => {
+                self.collect_expr_names(l, names);
+                self.collect_expr_names(r, names);
+            }
+            HirExprKind::Unary(_, inner) | HirExprKind::Move(inner) |
+            HirExprKind::MutrefE(inner) | HirExprKind::RefE(inner) |
+            HirExprKind::Question(inner) | HirExprKind::Await(inner) |
+            HirExprKind::Spawn(inner, _) | HirExprKind::Field(inner, _) |
+            HirExprKind::OptChain(inner, _) => {
+                self.collect_expr_names(inner, names);
+            }
+            HirExprKind::Call(callee, args) => {
+                self.collect_expr_names(callee, names);
+                for a in args { self.collect_expr_names(a, names); }
+            }
+            HirExprKind::MethodCall { receiver, args, .. } => {
+                self.collect_expr_names(receiver, names);
+                for a in args { self.collect_expr_names(a, names); }
+            }
+            HirExprKind::FStr(parts) | HirExprKind::List(parts) | HirExprKind::Tuple(parts) => {
+                for p in parts { self.collect_expr_names(p, names); }
+            }
+            HirExprKind::Match(subj, arms) => {
+                self.collect_expr_names(subj, names);
+                for a in arms { self.collect_expr_names(&a.body, names); }
+            }
+            HirExprKind::When(arms) => {
+                for a in arms {
+                    if let Some(c) = &a.cond { self.collect_expr_names(c, names); }
+                    self.collect_expr_names(&a.body, names);
+                }
+            }
+            HirExprKind::StructConstruct { args, .. } | HirExprKind::PathCall { args, .. } => {
+                for a in args { self.collect_expr_names(a, names); }
+            }
+            HirExprKind::EnumConstruct { value, .. } => {
+                if let Some(v) = value { self.collect_expr_names(v, names); }
+            }
+            HirExprKind::Block(ss) => {
+                for s in ss { names.extend(self.collect_stmt_names(s)); }
+            }
+            _ => {}
+        }
+    }
+
     fn stmt(&mut self, s: &HirStmt) -> Option<Value> {
         match s {
-            HirStmt::Val { name, value, .. } | HirStmt::Var { name, value, .. } => {
+            HirStmt::Val { name, value, ty, .. } | HirStmt::Var { name, value, ty, .. } => {
                 let v = self.expr(value);
+                // Track destructible variables for ASAP.
+                let mut type_name = match ty {
+                    HirType::Struct(n) | HirType::DataClass(n) => Some(n.clone()),
+                    _ => self.infer_type_from_expr(value),
+                };
+                // If value is from another variable, check if source is destructible.
+                if type_name.is_none() {
+                    if let HirExprKind::Ident(src_name) = &value.kind {
+                        if let Some((_, src_type)) = self.destructibles.iter().find(|(n, _)| n == src_name) {
+                            type_name = Some(src_type.clone());
+                        }
+                    }
+                }
+                // Clone if assigning a destructible value from another variable
+                // (ensures independent lifecycle for @value copies).
+                let v = if let Some(ref tn) = type_name {
+                    if self.del_fns.contains_key(tn) {
+                        if matches!(&value.kind, HirExprKind::Ident(_) | HirExprKind::SelfExpr) {
+                            self.rt("fuse_rt_clone", &[v])
+                        } else { v }
+                    } else { v }
+                } else { v };
                 self.def(name, v);
+                if let Some(tn) = type_name {
+                    if self.del_fns.contains_key(&tn) {
+                        self.destructibles.push((name.clone(), tn));
+                    }
+                }
                 None
             }
             HirStmt::ValTuple { names, value, .. } => {
@@ -643,6 +875,11 @@ impl<'a, 'b> FnGen<'a, 'b> {
                         self.rt_void("fuse_rt_struct_set_field", &[obj, fp, fl, v]);
                     }
                 }
+                // Set del_fn on structs that have __del__.
+                if self.del_fns.contains_key(type_name) {
+                    let (dp, dl) = self.str_const("__del__");
+                    self.rt_void("fuse_rt_struct_set_del", &[obj, dp, dl]);
+                }
                 obj
             }
             HirExprKind::EnumConstruct { enum_name, variant, value } => {
@@ -671,7 +908,14 @@ impl<'a, 'b> FnGen<'a, 'b> {
             }
             HirExprKind::Match(subj, arms) => self.match_expr(subj, arms),
             HirExprKind::When(arms) => self.when_expr(arms),
-            HirExprKind::Move(inner) | HirExprKind::MutrefE(inner) | HirExprKind::RefE(inner) =>
+            HirExprKind::Move(inner) => {
+                // Mark the moved variable as destroyed so ASAP doesn't double-free.
+                if let HirExprKind::Ident(name) = &inner.kind {
+                    self.destroyed.insert(name.clone());
+                }
+                self.expr(inner)
+            }
+            HirExprKind::MutrefE(inner) | HirExprKind::RefE(inner) =>
                 self.expr(inner),
             HirExprKind::Block(ss) => self.stmts(ss).unwrap_or_else(|| self.rt("fuse_rt_unit", &[])),
             HirExprKind::Lambda { params, body, .. } => {
@@ -794,6 +1038,14 @@ impl<'a, 'b> FnGen<'a, 'b> {
             let m = format!("fuse_ext_{}_{}", prefix, method);
             if self.fuse_fns.contains_key(&m) { return self.call_fuse(&m, &all); }
         }
+        // Brute force: search all fuse_ext_*_{method} names.
+        let suffix = format!("_{}", method);
+        let candidates: Vec<String> = self.fuse_fns.keys()
+            .filter(|k| k.starts_with("fuse_ext_") && k.ends_with(&suffix))
+            .cloned().collect();
+        if let Some(m) = candidates.first() {
+            return self.call_fuse(m, &all);
+        }
         self.rt("fuse_rt_unit", &[])
     }
 
@@ -839,7 +1091,7 @@ impl<'a, 'b> FnGen<'a, 'b> {
         self.b.switch_to_block(fmb); self.b.seal_block(fmb);
         let inner = self.b.block_params(fmb)[0];
         let (fp, fl) = self.str_const(field);
-        let res = self.rt("fuse_rt_field", &[inner, fp, fl]);
+        let res = self.rt("fuse_rt_safe_field", &[inner, fp, fl]);
         self.b.ins().jump(mb, &[res]);
         self.b.switch_to_block(mb); self.b.seal_block(mb);
         self.b.block_params(mb)[0]
@@ -914,11 +1166,11 @@ impl<'a, 'b> FnGen<'a, 'b> {
                 _ => { self.b.ins().jump(bb, &[]); }
             }
             self.b.switch_to_block(bb); self.b.seal_block(bb);
-            // Bind sub-patterns for constructors.
+            // Bind sub-patterns for constructors (recursive for nested patterns).
             if let HirPattern::Constructor(_, sub_pats, _, _) = &arm.pattern {
                 if !sub_pats.is_empty() {
                     let inner = self.rt("fuse_rt_unwrap_enum", &[sv]);
-                    if let Some(HirPattern::Ident(n, _, _)) = sub_pats.first() { self.def(n, inner); }
+                    self.bind_sub_patterns(&sub_pats, inner);
                 }
             }
             let bv = self.expr(&arm.body);
@@ -930,6 +1182,34 @@ impl<'a, 'b> FnGen<'a, 'b> {
         }
         self.b.switch_to_block(mb); self.b.seal_block(mb);
         self.b.block_params(mb)[0]
+    }
+
+    /// Recursively bind sub-patterns from a constructor match.
+    fn bind_sub_patterns(&mut self, pats: &[HirPattern], val: Value) {
+        for pat in pats {
+            match pat {
+                HirPattern::Ident(n, _, _) => { self.def(n, val); }
+                HirPattern::Constructor(name, inner_pats, _, _) => {
+                    // Nested constructor: unwrap and recurse.
+                    // The val should be an enum variant matching `name`.
+                    if !inner_pats.is_empty() {
+                        let inner = self.rt("fuse_rt_unwrap_enum", &[val]);
+                        self.bind_sub_patterns(inner_pats, inner);
+                    }
+                }
+                HirPattern::Wildcard(_) => {} // nothing to bind
+                HirPattern::Tuple(inner_pats, _) => {
+                    // Destructure tuple elements.
+                    for (i, p) in inner_pats.iter().enumerate() {
+                        let idx = self.b.ins().iconst(types::I64, i as i64);
+                        let idx_v = self.rt("fuse_rt_int", &[idx]);
+                        let elem = self.rt("fuse_rt_list_get", &[val, idx_v]);
+                        self.bind_sub_patterns(&[p.clone()], elem);
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn when_expr(&mut self, arms: &[HirWhenArm]) -> Value {
