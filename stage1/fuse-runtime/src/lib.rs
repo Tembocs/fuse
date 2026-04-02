@@ -13,6 +13,7 @@ mod value;
 mod builtins;
 mod list_ops;
 mod string_ops;
+pub mod ffi;
 
 pub use value::*;
 pub use builtins::*;
