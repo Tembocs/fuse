@@ -654,6 +654,16 @@ pub extern "C" fn fuse_rt_read_file(path: *const u8, path_len: i64) -> *mut Fuse
     }
 }
 
+/// readFile that accepts a FuseValue::Str (for compiled code convenience).
+#[no_mangle]
+pub extern "C" fn fuse_rt_read_file_val(path_val: *mut FuseValue) -> *mut FuseValue {
+    let p = unsafe { ref_val(path_val) }.as_str().to_string();
+    match std::fs::read_to_string(&p) {
+        Ok(contents) => box_val(FuseValue::ok(FuseValue::Str(contents))),
+        Err(e) => box_val(FuseValue::err(FuseValue::Str(e.to_string()))),
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn fuse_rt_args() -> *mut FuseValue {
     let args: Vec<FuseValue> = std::env::args()
@@ -690,6 +700,38 @@ pub extern "C" fn fuse_rt_panic(msg: *const u8, len: i64) {
     let s = unsafe { str_from_raw(msg, len) };
     eprintln!("Fuse panic: {s}");
     std::process::exit(1);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Mutref support — ref cells for pass-by-mutable-reference
+// ═══════════════════════════════════════════════════════════════════════
+
+/// Create a ref cell (single-element list) for mutref passing.
+#[no_mangle]
+pub extern "C" fn fuse_rt_ref_new(val: *mut FuseValue) -> *mut FuseValue {
+    let v = unsafe { ref_val(val).clone() };
+    box_val(FuseValue::List(vec![v]))
+}
+
+/// Read from a ref cell.
+#[no_mangle]
+pub extern "C" fn fuse_rt_ref_get(cell: *mut FuseValue) -> *mut FuseValue {
+    let c = unsafe { ref_val(cell) };
+    if let FuseValue::List(items) = c {
+        if !items.is_empty() {
+            return box_val(items[0].clone());
+        }
+    }
+    box_val(FuseValue::Unit)
+}
+
+/// Write to a ref cell.
+#[no_mangle]
+pub extern "C" fn fuse_rt_ref_set(cell: *mut FuseValue, val: *mut FuseValue) {
+    let v = unsafe { ref_val(val).clone() };
+    if let FuseValue::List(ref mut items) = unsafe { mut_val(cell) } {
+        if items.is_empty() { items.push(v); } else { items[0] = v; }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════════════

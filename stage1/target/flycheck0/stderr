@@ -1,1 +1,48 @@
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.17s
+   0.225195700s  INFO prepare_target{force=false package_id=cranelift-ffi v0.1.0 (D:\rust\fuse\stage1\cranelift-ffi) target="cranelift_ffi"}: cargo::core::compiler::fingerprint: fingerprint error for cranelift-ffi v0.1.0 (D:\rust\fuse\stage1\cranelift-ffi)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("cranelift_ffi", ["staticlib"], "D:\\rust\\fuse\\stage1\\cranelift-ffi\\src\\lib.rs", Edition2021) }
+   0.226190700s  INFO prepare_target{force=false package_id=cranelift-ffi v0.1.0 (D:\rust\fuse\stage1\cranelift-ffi) target="cranelift_ffi"}: cargo::core::compiler::fingerprint:     err: failed to read `D:\rust\fuse\stage1\target\debug\.fingerprint\cranelift-ffi-bdfab39c0a0dd363\test-lib-cranelift_ffi`
+
+Caused by:
+    The system cannot find the file specified. (os error 2)
+
+Stack backtrace:
+   0: git_midx_writer_dump
+   1: git_midx_writer_dump
+   2: git_midx_writer_dump
+   3: git_midx_writer_dump
+   4: git_filter_source_repo
+   5: git_filter_source_repo
+   6: git_filter_source_repo
+   7: git_filter_source_repo
+   8: git_filter_source_repo
+   9: git_filter_source_repo
+  10: git_filter_source_repo
+  11: git_libgit2_prerelease
+  12: <unknown>
+  13: <unknown>
+  14: <unknown>
+  15: <unknown>
+  16: git_midx_writer_dump
+  17: git_filter_source_repo
+  18: git_midx_writer_dump
+  19: BaseThreadInitThunk
+  20: RtlUserThreadStart
+   0.243690400s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint: stale: changed "D:\\rust\\fuse\\stage1\\fuse-runtime\\src\\ffi.rs"
+   0.243936600s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint:           (vs) "D:\\rust\\fuse\\stage1\\target\\debug\\.fingerprint\\fuse-runtime-b462c917e6d40267\\dep-lib-fuse_runtime"
+   0.243946400s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 13419606495, nanos: 555827400 } < FileTime { seconds: 13419610516, nanos: 639788600 }
+   0.252921400s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint: fingerprint dirty for fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime)/Check { test: false }/TargetInner { name_inferred: true, ..: lib_target("fuse_runtime", ["rlib", "staticlib"], "D:\\rust\\fuse\\stage1\\fuse-runtime\\src\\lib.rs", Edition2021) }
+   0.252962600s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "D:\\rust\\fuse\\stage1\\target\\debug\\.fingerprint\\fuse-runtime-b462c917e6d40267\\dep-lib-fuse_runtime", reference_mtime: FileTime { seconds: 13419606495, nanos: 555827400 }, stale: "D:\\rust\\fuse\\stage1\\fuse-runtime\\src\\ffi.rs", stale_mtime: FileTime { seconds: 13419610516, nanos: 639788600 } }))
+   0.254104100s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint: stale: changed "D:\\rust\\fuse\\stage1\\fuse-runtime\\src\\ffi.rs"
+   0.254135300s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint:           (vs) "D:\\rust\\fuse\\stage1\\target\\debug\\.fingerprint\\fuse-runtime-055ad8da3c339f10\\dep-test-lib-fuse_runtime"
+   0.254142600s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint:                FileTime { seconds: 13419585042, nanos: 676191600 } < FileTime { seconds: 13419610516, nanos: 639788600 }
+   0.267618200s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint: fingerprint dirty for fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime)/Check { test: true }/TargetInner { name_inferred: true, ..: lib_target("fuse_runtime", ["rlib", "staticlib"], "D:\\rust\\fuse\\stage1\\fuse-runtime\\src\\lib.rs", Edition2021) }
+   0.267657900s  INFO prepare_target{force=false package_id=fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime) target="fuse_runtime"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleItem(ChangedFile { reference: "D:\\rust\\fuse\\stage1\\target\\debug\\.fingerprint\\fuse-runtime-055ad8da3c339f10\\dep-test-lib-fuse_runtime", reference_mtime: FileTime { seconds: 13419585042, nanos: 676191600 }, stale: "D:\\rust\\fuse\\stage1\\fuse-runtime\\src\\ffi.rs", stale_mtime: FileTime { seconds: 13419610516, nanos: 639788600 } }))
+   0.275275800s  INFO prepare_target{force=false package_id=fusec v0.1.0 (D:\rust\fuse\stage1\fusec) target="fusec"}: cargo::core::compiler::fingerprint: fingerprint dirty for fusec v0.1.0 (D:\rust\fuse\stage1\fusec)/Check { test: false }/TargetInner { name: "fusec", doc: true, ..: with_path("D:\\rust\\fuse\\stage1\\fusec\\src\\main.rs", Edition2021) }
+   0.275606200s  INFO prepare_target{force=false package_id=fusec v0.1.0 (D:\rust\fuse\stage1\fusec) target="fusec"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(32) })
+   0.284085300s  INFO prepare_target{force=false package_id=fusec v0.1.0 (D:\rust\fuse\stage1\fusec) target="fusec"}: cargo::core::compiler::fingerprint: fingerprint dirty for fusec v0.1.0 (D:\rust\fuse\stage1\fusec)/Check { test: true }/TargetInner { name: "fusec", doc: true, ..: with_path("D:\\rust\\fuse\\stage1\\fusec\\src\\main.rs", Edition2021) }
+   0.284121700s  INFO prepare_target{force=false package_id=fusec v0.1.0 (D:\rust\fuse\stage1\fusec) target="fusec"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(32) })
+   0.297709800s  INFO prepare_target{force=false package_id=fusec v0.1.0 (D:\rust\fuse\stage1\fusec) target="run_tests"}: cargo::core::compiler::fingerprint: fingerprint dirty for fusec v0.1.0 (D:\rust\fuse\stage1\fusec)/Check { test: true }/TargetInner { kind: "test", name: "run_tests", benched: false, ..: with_path("D:\\rust\\fuse\\stage1\\fusec\\tests\\run_tests.rs", Edition2021) }
+   0.297746500s  INFO prepare_target{force=false package_id=fusec v0.1.0 (D:\rust\fuse\stage1\fusec) target="run_tests"}: cargo::core::compiler::fingerprint:     dirty: FsStatusOutdated(StaleDepFingerprint { unit: UnitIndex(32) })
+    Checking fuse-runtime v0.1.0 (D:\rust\fuse\stage1\fuse-runtime)
+    Checking cranelift-ffi v0.1.0 (D:\rust\fuse\stage1\cranelift-ffi)
+    Checking fusec v0.1.0 (D:\rust\fuse\stage1\fusec)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.54s

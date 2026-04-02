@@ -934,6 +934,15 @@ fn pLamBody(mutref p: Parser, mutref b: List<Node>) {
 
 
 
+// ── Shared helper (used by both interpreter and compiler) ──
+
+fn getFieldNames(d: Node) -> List<String> {
+  var ns: List<String> = []
+  for f in d.children { if f.kind == "Field" { ns.push(f.sval.split("|").get(1)) } }
+  ns
+}
+
+
 // =============================================================================
 // Section 5: Extern FFI declarations
 // =============================================================================
@@ -1723,6 +1732,8 @@ fn cgFor(mutref c: Compiler, s: Node) -> Int {
 // =============================================================================
 
 fn compileProg(mutref c: Compiler, prog: Node) {
+  eprintln(f"compileProg: kind={prog.kind}")
+  eprintln(f"compileProg: children count={prog.children.len()}")
   // Collect declarations
   for d in prog.children {
     if d.kind == "EnumDecl" { c.enums.push(d) }
@@ -1901,12 +1912,19 @@ fn main() -> Result<(), String> {
   if outputFile == "" {
     outputFile = sourceFile.replace(".fuse", "")
   }
+  eprintln(f"S2: reading {sourceFile}")
   val source = readFile(sourceFile)?
+  eprintln(f"S2: tokenizing ({source.len()} chars)")
   val tokens = tokenize(source)
+  eprintln(f"S2: got {tokens.len()} tokens")
+  eprintln(f"S2: first token type = {tokens.get(0).ty}")
   var parser = newParser(tokens)
+  eprintln("S2: parser created, parsing...")
   val program = parser.parseProgram()
+  eprintln(f"S2: parsed, program.kind={program.kind}")
   var compiler = newCompiler()
   importAllRt(mutref compiler)
+  eprintln("S2: compiling...")
   compileProg(mutref compiler, program)
   cgMain(mutref compiler, program)
   val objPath = f"{outputFile}.o"

@@ -297,12 +297,23 @@ impl Codegen {
                 if f.ext_type.is_some() && pi < params.len() {
                     ctx.def("self", params[pi]); pi += 1;
                 }
+                ctx.mutref_cells = Vec::new();
+                let mut mutref_cells: Vec<(String, Value)> = Vec::new();
                 for p in &f.params {
                     if p.name == "self" {
                         if f.ext_type.is_some() { continue; }
                         if pi < params.len() { ctx.def("self", params[pi]); pi += 1; }
                     } else if pi < params.len() {
-                        ctx.def(&p.name, params[pi]); pi += 1;
+                        let param_val = params[pi]; pi += 1;
+                        if p.convention == Convention::Mutref {
+                            // Mutref param is a ref cell — unwrap it.
+                            let cell = param_val;
+                            let actual = ctx.rt("fuse_rt_ref_get", &[cell]);
+                            ctx.def(&p.name, actual);
+                            mutref_cells.push((p.name.clone(), cell));
+                        } else {
+                            ctx.def(&p.name, param_val);
+                        }
                     }
                     // Track owned parameters of destructible types for ASAP.
                     if p.convention == Convention::Owned {
@@ -323,6 +334,14 @@ impl Codegen {
                     HirFnBody::Expr(e) => Some(ctx.expr(e)),
                 };
                 if !ctx.terminated {
+                    ctx.mutref_cells = mutref_cells;
+                    // Write mutref params back to their ref cells.
+                    for (name, cell) in &ctx.mutref_cells.clone() {
+                        if let Some(&var) = ctx.vars.get(name) {
+                            let val = ctx.b.use_var(var);
+                            ctx.rt_void("fuse_rt_ref_set", &[*cell, val]);
+                        }
+                    }
                     // Emit deferred expressions before final return.
                     ctx.emit_defers();
                     let rv = result.unwrap_or_else(|| ctx.rt("fuse_rt_unit", &[]));
@@ -433,6 +452,8 @@ struct FnGen<'a, 'b> {
     destructibles: Vec<(String, String)>,
     /// Variables already destroyed by ASAP (don't double-destroy).
     destroyed: std::collections::HashSet<String>,
+    /// Mutref ref cells: (param_name, cell_value) for writeback before return.
+    mutref_cells: Vec<(String, Value)>,
 }
 
 impl<'a, 'b> FnGen<'a, 'b> {
@@ -451,7 +472,8 @@ impl<'a, 'b> FnGen<'a, 'b> {
         Self { b, module, fuse_fns, rt_fns, string_data, str_counter,
                vars: HashMap::new(), next_var: 0, terminated: false,
                defers: Vec::new(), lambda_counter, pending_lambdas,
-               del_fns, extern_sigs, destructibles: Vec::new(), destroyed: std::collections::HashSet::new() }
+               del_fns, extern_sigs, destructibles: Vec::new(), destroyed: std::collections::HashSet::new(),
+               mutref_cells: Vec::new() }
     }
 
     fn def(&mut self, name: &str, val: Value) {
@@ -740,6 +762,13 @@ impl<'a, 'b> FnGen<'a, 'b> {
                     Some(ex) => self.expr(ex),
                     None => self.rt("fuse_rt_unit", &[]),
                 };
+                // Write mutref params back before returning.
+                for (name, cell) in &self.mutref_cells.clone() {
+                    if let Some(&var) = self.vars.get(name) {
+                        let val = self.b.use_var(var);
+                        self.rt_void("fuse_rt_ref_set", &[*cell, val]);
+                    }
+                }
                 // Emit deferred expressions in reverse (LIFO) before returning.
                 self.emit_defers();
                 self.b.ins().return_(&[v]);
@@ -961,13 +990,17 @@ impl<'a, 'b> FnGen<'a, 'b> {
             HirExprKind::Match(subj, arms) => self.match_expr(subj, arms),
             HirExprKind::When(arms) => self.when_expr(arms),
             HirExprKind::Move(inner) => {
-                // Mark the moved variable as destroyed so ASAP doesn't double-free.
                 if let HirExprKind::Ident(name) = &inner.kind {
                     self.destroyed.insert(name.clone());
                 }
                 self.expr(inner)
             }
-            HirExprKind::MutrefE(inner) | HirExprKind::RefE(inner) =>
+            HirExprKind::MutrefE(inner) => {
+                // Wrap in ref cell for mutref passing.
+                let v = self.expr(inner);
+                self.rt("fuse_rt_ref_new", &[v])
+            }
+            HirExprKind::RefE(inner) =>
                 self.expr(inner),
             HirExprKind::Block(ss) => self.stmts(ss).unwrap_or_else(|| self.rt("fuse_rt_unit", &[])),
             HirExprKind::Lambda { params, body, .. } => {
@@ -1023,13 +1056,44 @@ impl<'a, 'b> FnGen<'a, 'b> {
     }
 
     fn call_expr(&mut self, callee: &HirExpr, args: &[HirExpr]) -> Value {
-        let avs: Vec<Value> = args.iter().map(|a| self.expr(a)).collect();
+        // Track mutref args for writeback.
+        let mut mutref_writebacks: Vec<(String, Value)> = Vec::new();
+        let avs: Vec<Value> = args.iter().map(|a| {
+            let v = self.expr(a);
+            // If this arg is a mutref wrapping a variable, track it for writeback.
+            if let HirExprKind::MutrefE(inner) = &a.kind {
+                if let HirExprKind::Ident(name) = &inner.kind {
+                    mutref_writebacks.push((name.clone(), v));
+                }
+            }
+            v
+        }).collect();
         if let HirExprKind::Ident(name) = &callee.kind {
             match name.as_str() {
                 "println" => { let v = avs.into_iter().next().unwrap_or_else(|| self.rt("fuse_rt_unit", &[])); self.rt_void("fuse_rt_println", &[v]); return self.rt("fuse_rt_unit", &[]); }
                 "eprintln" => { let v = avs.into_iter().next().unwrap_or_else(|| self.rt("fuse_rt_unit", &[])); self.rt_void("fuse_rt_eprintln", &[v]); return self.rt("fuse_rt_unit", &[]); }
                 "exit" => { let v = avs.into_iter().next().unwrap_or_else(|| { let z = self.b.ins().iconst(types::I64, 0); self.rt("fuse_rt_int", &[z]) }); let ci = self.rt("fuse_rt_as_int", &[v]); self.rt_void("fuse_rt_exit", &[ci]); return self.rt("fuse_rt_unit", &[]); }
                 "panic" => { let v = avs.into_iter().next().unwrap_or_else(|| self.make_str("")); self.rt_void("fuse_rt_eprintln", &[v]); let o = self.b.ins().iconst(types::I64, 1); self.rt_void("fuse_rt_exit", &[o]); return self.rt("fuse_rt_unit", &[]); }
+                "args" => { return self.rt("fuse_rt_args", &[]); }
+                "readFile" => {
+                    return self.rt("fuse_rt_read_file_val", &[avs[0]]);
+                }
+                "fromCharCode" => {
+                    let code = self.rt("fuse_rt_as_int", &[avs[0]]);
+                    return self.rt("fuse_rt_from_char_code", &[code]);
+                }
+                "parseInt" => {
+                    let s = avs[0];
+                    let slen = self.rt("fuse_rt_len", &[s]);
+                    let len = self.rt("fuse_rt_as_int", &[slen]);
+                    return self.rt("fuse_rt_parse_int", &[s, len]);
+                }
+                "parseFloat" => {
+                    let s = avs[0];
+                    let slen = self.rt("fuse_rt_len", &[s]);
+                    let len = self.rt("fuse_rt_as_int", &[slen]);
+                    return self.rt("fuse_rt_parse_float", &[s, len]);
+                }
                 _ => {}
             }
             // Check if this is an extern function — needs arg unboxing.
@@ -1057,7 +1121,17 @@ impl<'a, 'b> FnGen<'a, 'b> {
                 };
             }
             let m = format!("fuse_{name}");
-            if self.fuse_fns.contains_key(&m) { return self.call_fuse(&m, &avs); }
+            if self.fuse_fns.contains_key(&m) {
+                let result = self.call_fuse(&m, &avs);
+                // Mutref writeback: read ref cells back to caller variables.
+                for (var_name, cell) in &mutref_writebacks {
+                    let new_val = self.rt("fuse_rt_ref_get", &[*cell]);
+                    if let Some(&var) = self.vars.get(var_name) {
+                        self.b.def_var(var, new_val);
+                    }
+                }
+                return result;
+            }
         }
         self.rt("fuse_rt_unit", &[])
     }
@@ -1114,13 +1188,46 @@ impl<'a, 'b> FnGen<'a, 'b> {
             let m = format!("fuse_ext_{}_{}", prefix, method);
             if self.fuse_fns.contains_key(&m) { return self.call_fuse(&m, &all); }
         }
-        // Brute force: search all fuse_ext_*_{method} names.
+        // Search all fuse_ext_*_{method} names with runtime type dispatch.
         let suffix = format!("_{}", method);
         let candidates: Vec<String> = self.fuse_fns.keys()
             .filter(|k| k.starts_with("fuse_ext_") && k.ends_with(&suffix))
             .cloned().collect();
-        if let Some(m) = candidates.first() {
-            return self.call_fuse(m, &all);
+        if candidates.len() == 1 {
+            return self.call_fuse(&candidates[0], &all);
+        } else if candidates.len() > 1 {
+            // Multiple candidates — emit runtime type dispatch.
+            let type_name = self.rt("fuse_rt_type_name", &[obj]);
+            let merge = self.b.create_block();
+            self.b.append_block_param(merge, FUSE_VALUE_TYPE);
+
+            for (i, cand) in candidates.iter().enumerate() {
+                // Extract type name from "fuse_ext_TypeName_method"
+                let prefix = "fuse_ext_";
+                let type_part = &cand[prefix.len()..cand.len() - suffix.len()];
+                let expected = self.make_str(type_part);
+                let eq = self.rt("fuse_rt_eq", &[type_name, expected]);
+                let eq_bool = self.rt("fuse_rt_is_truthy", &[eq]);
+
+                let match_block = self.b.create_block();
+                let next_block = self.b.create_block();
+
+                self.b.ins().brif(eq_bool, match_block, &[], next_block, &[]);
+
+                self.b.switch_to_block(match_block);
+                self.b.seal_block(match_block);
+                let result = self.call_fuse(cand, &all);
+                self.b.ins().jump(merge, &[result]);
+
+                self.b.switch_to_block(next_block);
+                self.b.seal_block(next_block);
+            }
+            // Fallback: return unit.
+            let unit = self.rt("fuse_rt_unit", &[]);
+            self.b.ins().jump(merge, &[unit]);
+            self.b.switch_to_block(merge);
+            self.b.seal_block(merge);
+            return self.b.block_params(merge)[0];
         }
         self.rt("fuse_rt_unit", &[])
     }

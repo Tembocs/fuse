@@ -195,6 +195,10 @@ pub static RT_FUNCTIONS: &[RtFuncInfo] = &[
 
     // Generic method dispatch
     RtFuncInfo { name: "fuse_rt_struct_set_del",  params: &[PTR_TYPE, PTR_TYPE, types::I64],  ret: None },
+    // Mutref ref cells
+    RtFuncInfo { name: "fuse_rt_ref_new",       params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_ref_get",       params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_ref_set",       params: &[PTR_TYPE, PTR_TYPE],     ret: None },
     RtFuncInfo { name: "fuse_rt_safe_field",     params: &[PTR_TYPE, PTR_TYPE, types::I64], ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_len",            params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_contains",       params: &[PTR_TYPE, PTR_TYPE],     ret: Some(PTR_TYPE) },
@@ -203,6 +207,7 @@ pub static RT_FUNCTIONS: &[RtFuncInfo] = &[
 
     // System
     RtFuncInfo { name: "fuse_rt_read_file",      params: &[PTR_TYPE, types::I64],  ret: Some(PTR_TYPE) },
+    RtFuncInfo { name: "fuse_rt_read_file_val", params: &[PTR_TYPE],              ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_args",           params: &[],                      ret: Some(PTR_TYPE) },
     RtFuncInfo { name: "fuse_rt_exit",           params: &[types::I64],            ret: None },
     RtFuncInfo { name: "fuse_rt_parse_int",      params: &[PTR_TYPE, types::I64],  ret: Some(PTR_TYPE) },
