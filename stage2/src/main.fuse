@@ -1373,20 +1373,21 @@ fn cgLambda(mutref c: Compiler, e: Node) -> Int {
   cl_func_addr(c.ctx, c.bld, h)
 }
 
+fn cgCallArgs(mutref c: Compiler, e: Node) -> List<Int> {
+  var args: List<Int> = []
+  var i = 1
+  for ch in e.children {
+    if i > 0 { i = 0 }
+    else { args.push(cgExpr(mutref c, ch)) }
+  }
+  args
+}
+
 fn cgCall(mutref c: Compiler, e: Node) -> Int {
   val callee = e.children.get(0)
   if callee.kind == "Field" { return cgMethodCall(mutref c, callee, e) }
-  var args: List<Int> = []
-  var i = 1
-  loop {
-    if i >= e.children.len() { i = i }  // break
-    else { args.push(cgExpr(mutref c, e.children.get(i)))
-  i = i + 1
-  i = i - 1 }
-    i = i + 1
-    if i > e.children.len() { i = e.children.len() + 1 }
-    if i > e.children.len() { return cgCallInner(mutref c, callee, args) }
-  }
+  val args = cgCallArgs(mutref c, e)
+  cgCallInner(mutref c, callee, args)
 }
 
 fn cgCallInner(mutref c: Compiler, callee: Node, args: List<Int>) -> Int {
@@ -1419,35 +1420,23 @@ fn cgStructCon(mutref c: Compiler, name: String, args: List<Int>, decl: Node) ->
   val obj = rt2(mutref c, "fuse_rt_struct_new", sConst(mutref c, name), cl_iconst(c.bld, name.len()))
   val fns = getFieldNames(decl)
   var i = 0
-  loop {
-    if i >= args.len() or i >= fns.len() { i = args.len() + fns.len() }
-    else {
-      rt4(mutref c, "fuse_rt_struct_set_field", obj, sConst(mutref c, fns.get(i)), cl_iconst(c.bld, fns.get(i).len()), args.get(i))
-      i = i + 1
-      i = i - 1
+  for a in args {
+    if i < fns.len() {
+      rt4(mutref c, "fuse_rt_struct_set_field", obj, sConst(mutref c, fns.get(i)), cl_iconst(c.bld, fns.get(i).len()), a)
     }
     i = i + 1
-    if i > args.len() + fns.len() {
-      // Set __del__ if applicable
-      for dn in c.delFns { if dn == name { rt3(mutref c, "fuse_rt_struct_set_del", obj, sConst(mutref c, "__del__"), cl_iconst(c.bld, 7)) } }
-      return obj
-    }
   }
+  for dn in c.delFns {
+    if dn == name { rt3(mutref c, "fuse_rt_struct_set_del", obj, sConst(mutref c, "__del__"), cl_iconst(c.bld, 7)) }
+  }
+  obj
 }
 
 fn cgMethodCall(mutref c: Compiler, callee: Node, e: Node) -> Int {
   val oe = callee.children.get(0)
   val mn = callee.sval
-  var args: List<Int> = []
-  var i = 1
-  loop {
-    if i >= e.children.len() { i = e.children.len() + 1 }
-    else { args.push(cgExpr(mutref c, e.children.get(i)))
-  i = i + 1
-  i = i - 1 }
-    i = i + 1
-    if i > e.children.len() { return cgMethodInner(mutref c, oe, mn, args) }
-  }
+  val args = cgCallArgs(mutref c, e)
+  cgMethodInner(mutref c, oe, mn, args)
 }
 
 fn cgMethodInner(mutref c: Compiler, oe: Node, mn: String, args: List<Int>) -> Int {
