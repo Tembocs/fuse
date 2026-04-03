@@ -335,7 +335,7 @@ impl FuseValue {
         match (self, other) {
             (FuseValue::Int(a), FuseValue::Int(b)) => FuseValue::Bool(a >= b),
             (FuseValue::Float(a), FuseValue::Float(b)) => FuseValue::Bool(a >= b),
-            _ => panic!("cannot compare"),
+            _ => panic!("cannot compare ge: {} vs {}", self.type_name(), other.type_name()),
         }
     }
 

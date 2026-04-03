@@ -61,20 +61,23 @@ fn Lexer.advance(mutref self) -> String {
 fn isAlpha(ch: String) -> Bool {
   if ch.len() == 0 { return false }
   val c = ch.charCodeAt(0)
-  val upper = c >= 65 and c <= 90
-  val lower = c >= 97 and c <= 122
-  val under = c == 95
-  upper or lower or under
+  if c >= 65 { if c <= 90 { return true } }
+  if c >= 97 { if c <= 122 { return true } }
+  if c == 95 { return true }
+  false
 }
 
 fn isDigit(ch: String) -> Bool {
   if ch.len() == 0 { return false }
   val c = ch.charCodeAt(0)
-  c >= 48 and c <= 57
+  if c >= 48 { if c <= 57 { return true } }
+  false
 }
 
 fn isAlphaNum(ch: String) -> Bool {
-  isAlpha(ch) or isDigit(ch)
+  if isAlpha(ch) { return true }
+  if isDigit(ch) { return true }
+  false
 }
 
 fn keyword(s: String) -> String {
@@ -103,40 +106,61 @@ fn keyword(s: String) -> String {
   if s == "false" { return "false" }
   if s == "self" { return "self" }
   if s == "data" { return "data" }
+  if s == "loop" { return "loop" }
+  if s == "extern" { return "extern" }
   ""
 }
 
-fn skipWsLoop(mutref lex: Lexer) {
-  if lex.pos >= lex.src.len() { return }
-  val ch = lex.cur()
-  if ch == " " or ch == "\t" or ch == "\r" or ch == "\n" {
-    lex.advance()
-    skipWsLoop(mutref lex)
-  } else if ch == "/" and lex.peek(1) == "/" {
-    skipComment(mutref lex)
-    skipWsLoop(mutref lex)
+fn isWs(ch: String) -> Bool {
+  if ch == " " { return true }
+  if ch == "\t" { return true }
+  if ch == "\r" { return true }
+  if ch == "\n" { return true }
+  false
+}
+
+fn isComment(ref lex: Lexer) -> Bool {
+  if lex.cur() != "/" { return false }
+  if lex.peek(1) != "/" { return false }
+  true
+}
+
+fn skipWs(mutref lex: Lexer) {
+  loop {
+    if lex.pos >= lex.src.len() { return }
+    val ch = lex.cur()
+    if isWs(ch) {
+      lex.advance()
+    } else if isComment(ref lex) {
+      skipComment(mutref lex)
+    } else {
+      return
+    }
   }
 }
 
 fn skipComment(mutref lex: Lexer) {
-  if lex.pos >= lex.src.len() { return }
-  if lex.cur() == "\n" { return }
-  lex.advance()
-  skipComment(mutref lex)
+  loop {
+    if lex.pos >= lex.src.len() { return }
+    if lex.cur() == "\n" { return }
+    lex.advance()
+  }
 }
 
 fn readNumberLoop(mutref lex: Lexer, mutref s: String, mutref isFloat: Bool) {
-  if lex.pos >= lex.src.len() { return }
-  val ch = lex.cur()
-  if isDigit(ch) {
-    s = s + lex.advance()
-    readNumberLoop(mutref lex, mutref s, mutref isFloat)
-  } else if ch == "." {
-    if lex.peek(1) == "." { return }
-    if isAlpha(lex.peek(1)) { return }
-    isFloat = true
-    s = s + lex.advance()
-    readNumberLoop(mutref lex, mutref s, mutref isFloat)
+  loop {
+    if lex.pos >= lex.src.len() { return }
+    val ch = lex.cur()
+    if isDigit(ch) {
+      s = s + lex.advance()
+    } else if ch == "." {
+      if lex.peek(1) == "." { return }
+      if isAlpha(lex.peek(1)) { return }
+      isFloat = true
+      s = s + lex.advance()
+    } else {
+      return
+    }
   }
 }
 
@@ -172,15 +196,16 @@ fn Lexer.readEscape(mutref self) -> String {
 }
 
 fn readStrLoop(mutref lex: Lexer, mutref s: String) {
-  if lex.pos >= lex.src.len() { return }
-  if lex.cur() == "\"" { return }
-  if lex.cur() == "\\" {
-    lex.advance()
-    s = s + lex.readEscape()
-  } else {
-    s = s + lex.advance()
+  loop {
+    if lex.pos >= lex.src.len() { return }
+    if lex.cur() == "\"" { return }
+    if lex.cur() == "\\" {
+      lex.advance()
+      s = s + lex.readEscape()
+    } else {
+      s = s + lex.advance()
+    }
   }
-  readStrLoop(mutref lex, mutref s)
 }
 
 fn Lexer.readString(mutref self) -> Token {
@@ -194,47 +219,50 @@ fn Lexer.readString(mutref self) -> Token {
 }
 
 fn readFsExprLoop(mutref lex: Lexer, mutref s: String, mutref depth: Int) {
-  if lex.pos >= lex.src.len() or depth <= 0 { return }
-  val ch = lex.cur()
-  if ch == "{" {
-    depth = depth + 1
-    s = s + lex.advance()
-    readFsExprLoop(mutref lex, mutref s, mutref depth)
-  } else if ch == "}" {
-    depth = depth - 1
-    if depth > 0 {
+  loop {
+    if lex.pos >= lex.src.len() { return }
+    if depth <= 0 { return }
+    val ch = lex.cur()
+    if ch == "{" {
+      depth = depth + 1
       s = s + lex.advance()
-      readFsExprLoop(mutref lex, mutref s, mutref depth)
+    } else if ch == "}" {
+      depth = depth - 1
+      if depth > 0 {
+        s = s + lex.advance()
+      } else {
+        lex.advance()
+        return
+      }
     } else {
-      lex.advance()
+      s = s + lex.advance()
     }
-  } else {
-    s = s + lex.advance()
-    readFsExprLoop(mutref lex, mutref s, mutref depth)
   }
 }
 
 fn readFsLoop(mutref lex: Lexer, mutref parts: String, mutref buf: String) {
-  if lex.pos >= lex.src.len() or lex.cur() == "\"" { return }
-  if lex.cur() == "{" {
-    if buf.len() > 0 {
+  loop {
+    if lex.pos >= lex.src.len() { return }
+    if lex.cur() == "\"" { return }
+    if lex.cur() == "{" {
+      if buf.len() > 0 {
+        if parts.len() > 0 { parts = parts + "\x01" }
+        parts = parts + "L" + buf
+        buf = ""
+      }
+      lex.advance()
+      var expr = ""
+      var depth = 1
+      readFsExprLoop(mutref lex, mutref expr, mutref depth)
       if parts.len() > 0 { parts = parts + "\x01" }
-      parts = parts + "L" + buf
-      buf = ""
+      parts = parts + "E" + expr
+    } else if lex.cur() == "\\" {
+      lex.advance()
+      buf = buf + lex.readEscape()
+    } else {
+      buf = buf + lex.advance()
     }
-    lex.advance()
-    var expr = ""
-    var depth = 1
-    readFsExprLoop(mutref lex, mutref expr, mutref depth)
-    if parts.len() > 0 { parts = parts + "\x01" }
-    parts = parts + "E" + expr
-  } else if lex.cur() == "\\" {
-    lex.advance()
-    buf = buf + lex.readEscape()
-  } else {
-    buf = buf + lex.advance()
   }
-  readFsLoop(mutref lex, mutref parts, mutref buf)
 }
 
 fn Lexer.readFString(mutref self) -> Token {
@@ -254,10 +282,13 @@ fn Lexer.readFString(mutref self) -> Token {
 }
 
 fn readIdentLoop(mutref lex: Lexer, mutref s: String) {
-  if lex.pos >= lex.src.len() { return }
-  if isAlphaNum(lex.cur()) {
-    s = s + lex.advance()
-    readIdentLoop(mutref lex, mutref s)
+  loop {
+    if lex.pos >= lex.src.len() { return }
+    if isAlphaNum(lex.cur()) {
+      s = s + lex.advance()
+    } else {
+      return
+    }
   }
 }
 
@@ -314,16 +345,23 @@ fn Lexer.readOp(mutref self) -> Token {
   mkTok("Unknown", sl, sc)
 }
 
+fn isFStr(ref lex: Lexer) -> Bool {
+  if lex.cur() != "f" { return false }
+  if lex.peek(1) != "\"" { return false }
+  true
+}
+
 fn tokenizeLoop(mutref lex: Lexer, mutref tokens: List<Token>) {
-  skipWsLoop(mutref lex)
-  if lex.pos >= lex.src.len() { return }
-  val ch = lex.cur()
-  if isDigit(ch) { tokens.push(lex.readNumber()) }
-  else if ch == "\"" { tokens.push(lex.readString()) }
-  else if ch == "f" and lex.peek(1) == "\"" { tokens.push(lex.readFString()) }
-  else if isAlpha(ch) { tokens.push(lex.readIdent()) }
-  else { tokens.push(lex.readOp()) }
-  tokenizeLoop(mutref lex, mutref tokens)
+  loop {
+    skipWs(mutref lex)
+    if lex.pos >= lex.src.len() { return }
+    val ch = lex.cur()
+    if isDigit(ch) { tokens.push(lex.readNumber()) }
+    else if ch == "\"" { tokens.push(lex.readString()) }
+    else if isFStr(ref lex) { tokens.push(lex.readFString()) }
+    else if isAlpha(ch) { tokens.push(lex.readIdent()) }
+    else { tokens.push(lex.readOp()) }
+  }
 }
 
 fn tokenize(source: String) -> List<Token> {
@@ -384,9 +422,10 @@ fn Parser.parseProgram(mutref self) -> Node {
   ndC("Program", decls)
 }
 fn ppLoop(mutref p: Parser, mutref d: List<Node>) {
-  if p.atEof() { return }
-  d.push(p.parseDecl())
-  ppLoop(mutref p, mutref d)
+  loop {
+    if p.atEof() { return }
+    d.push(p.parseDecl())
+  }
 }
 
 fn Parser.parseAnnotation(mutref self) -> Node {
@@ -395,12 +434,14 @@ fn Parser.parseAnnotation(mutref self) -> Node {
   if self.eat("LParen") { skipParens(mutref self, 1) }
   ndS("Ann", name)
 }
-fn skipParens(mutref p: Parser, depth: Int) {
-  if depth <= 0 { return }
-  if p.peekTy() == "LParen" { p.advance() skipParens(mutref p, depth + 1) return }
-  if p.peekTy() == "RParen" { p.advance() skipParens(mutref p, depth - 1) return }
-  p.advance()
-  skipParens(mutref p, depth)
+fn skipParens(mutref p: Parser, startDepth: Int) {
+  var depth = startDepth
+  loop {
+    if depth <= 0 { return }
+    if p.peekTy() == "LParen" { p.advance() depth = depth + 1 }
+    else if p.peekTy() == "RParen" { p.advance() depth = depth - 1 }
+    else { p.advance() }
+  }
 }
 
 fn Parser.parseDecl(mutref self) -> Node {
@@ -413,12 +454,14 @@ fn Parser.parseDecl(mutref self) -> Node {
   if ty == "data" { return self.parseDataClassDecl() }
   if ty == "val" { return self.parseTopVal() }
   if ty == "var" { return self.parseTopVar() }
+  if ty == "extern" { return self.parseExternFn() }
   panic(f"expected decl, got {ty} at line {self.tokens.get(self.pos).line}")
 }
 fn pAnns(mutref p: Parser, mutref a: List<Node>) {
-  if not p.at("At") { return }
-  a.push(p.parseAnnotation())
-  pAnns(mutref p, mutref a)
+  loop {
+    if not p.at("At") { return }
+    a.push(p.parseAnnotation())
+  }
 }
 
 fn Parser.parseFnDecl(mutref self, anns: List<Node>) -> Node {
@@ -444,9 +487,10 @@ fn hasAnn(anns: List<Node>, n: String) -> Bool {
   f
 }
 fn pParamLoop(mutref p: Parser, mutref ps: List<Node>) {
-  if not p.eat("Comma") { return }
-  ps.push(p.parseParam())
-  pParamLoop(mutref p, mutref ps)
+  loop {
+    if not p.eat("Comma") { return }
+    ps.push(p.parseParam())
+  }
 }
 fn Parser.parseParam(mutref self) -> Node {
   var c = ""
@@ -465,12 +509,14 @@ fn Parser.skipType(mutref self) -> String {
   if self.eat("Pipe") { self.skipType() }
   name
 }
-fn skipTyInner(mutref p: Parser, d: Int) {
-  if d <= 0 { return }
-  if p.peekTy() == "Lt" { p.advance() skipTyInner(mutref p, d + 1) return }
-  if p.peekTy() == "Gt" { p.advance() skipTyInner(mutref p, d - 1) return }
-  p.advance()
-  skipTyInner(mutref p, d)
+fn skipTyInner(mutref p: Parser, startD: Int) {
+  var d = startD
+  loop {
+    if d <= 0 { return }
+    if p.peekTy() == "Lt" { p.advance() d = d + 1 }
+    else if p.peekTy() == "Gt" { p.advance() d = d - 1 }
+    else { p.advance() }
+  }
 }
 
 fn Parser.parseEnumDecl(mutref self) -> Node {
@@ -483,21 +529,23 @@ fn Parser.parseEnumDecl(mutref self) -> Node {
   ndSC("EnumDecl", name, vs)
 }
 fn pEnumVars(mutref p: Parser, mutref vs: List<Node>) {
-  if p.at("RBrace") { return }
-  val vn = p.expectIdent("variant")
-  var fs: List<Node> = []
-  if p.eat("LParen") {
-    if not p.at("RParen") { fs.push(ndS("T", p.skipType())) pEnumFs(mutref p, mutref fs) }
-    p.expect("RParen", "variant")
+  loop {
+    if p.at("RBrace") { return }
+    val vn = p.expectIdent("variant")
+    var fs: List<Node> = []
+    if p.eat("LParen") {
+      if not p.at("RParen") { fs.push(ndS("T", p.skipType())) pEnumFs(mutref p, mutref fs) }
+      p.expect("RParen", "variant")
+    }
+    p.eat("Comma")
+    vs.push(ndSC("Variant", vn, fs))
   }
-  p.eat("Comma")
-  vs.push(ndSC("Variant", vn, fs))
-  pEnumVars(mutref p, mutref vs)
 }
 fn pEnumFs(mutref p: Parser, mutref fs: List<Node>) {
-  if not p.eat("Comma") { return }
-  fs.push(ndS("T", p.skipType()))
-  pEnumFs(mutref p, mutref fs)
+  loop {
+    if not p.eat("Comma") { return }
+    fs.push(ndS("T", p.skipType()))
+  }
 }
 
 fn Parser.parseStructDecl(mutref self) -> Node {
@@ -511,18 +559,27 @@ fn Parser.parseStructDecl(mutref self) -> Node {
   ndSI("StructDecl", name, fields, methods)
 }
 fn pStructBody(mutref p: Parser, mutref fs: List<Node>, mutref ms: List<Node>) {
-  if p.at("RBrace") { return }
-  if p.at("fn") { var ea: List<Node> = [] ms.push(p.parseFnDecl(ea)) }
-  else if p.at("val") or p.at("var") {
-    val m = p.at("var")
-    p.advance()
-    val n = p.expectIdent("field")
-    p.expect("Colon", "field")
-    p.skipType()
-    val ms2 = when { m => "var" else => "val" }
-    fs.push(ndS("Field", f"{ms2}|{n}"))
+  loop {
+    if p.at("RBrace") { return }
+    if p.at("fn") { var ea: List<Node> = [] ms.push(p.parseFnDecl(ea)) }
+    else if p.at("val") {
+      val m = p.at("var")
+      p.advance()
+      val n = p.expectIdent("field")
+      p.expect("Colon", "field")
+      p.skipType()
+      val ms2 = when { m => "var" else => "val" }
+      fs.push(ndS("Field", f"{ms2}|{n}"))
+    } else if p.at("var") {
+      val m = p.at("var")
+      p.advance()
+      val n = p.expectIdent("field")
+      p.expect("Colon", "field")
+      p.skipType()
+      val ms2 = when { m => "var" else => "val" }
+      fs.push(ndS("Field", f"{ms2}|{n}"))
+    }
   }
-  pStructBody(mutref p, mutref fs, mutref ms)
 }
 
 fn Parser.parseDataClassDecl(mutref self) -> Node {
@@ -539,7 +596,8 @@ fn Parser.parseDataClassDecl(mutref self) -> Node {
 }
 fn pDcField(mutref p: Parser, mutref fs: List<Node>) {
   val m = p.at("var")
-  if p.at("val") or p.at("var") { p.advance() }
+  if p.at("val") { p.advance() }
+  else if p.at("var") { p.advance() }
   val n = p.expectIdent("dc field")
   p.expect("Colon", "dc field")
   p.skipType()
@@ -547,20 +605,23 @@ fn pDcField(mutref p: Parser, mutref fs: List<Node>) {
   fs.push(ndS("Field", f"{ms}|{n}"))
 }
 fn pDcFieldLoop(mutref p: Parser, mutref fs: List<Node>) {
-  if not p.eat("Comma") { return }
-  pDcField(mutref p, mutref fs)
-  pDcFieldLoop(mutref p, mutref fs)
+  loop {
+    if not p.eat("Comma") { return }
+    pDcField(mutref p, mutref fs)
+  }
 }
 fn pDcMethods(mutref p: Parser, mutref ms: List<Node>) {
-  if p.at("RBrace") { return }
-  var ea: List<Node> = []
-  ms.push(p.parseFnDecl(ea))
-  pDcMethods(mutref p, mutref ms)
+  loop {
+    if p.at("RBrace") { return }
+    var ea: List<Node> = []
+    ms.push(p.parseFnDecl(ea))
+  }
 }
 
 fn Parser.parseTopVal(mutref self) -> Node {
   self.expect("val", "val")
-  if self.peekTy() == "ref" or self.peekTy() == "mutref" { self.advance() }
+  if self.peekTy() == "ref" { self.advance() }
+  else if self.peekTy() == "mutref" { self.advance() }
   val name = self.expectIdent("val")
   if self.eat("Colon") { self.skipType() }
   self.expect("Eq", "val")
@@ -574,6 +635,34 @@ fn Parser.parseTopVar(mutref self) -> Node {
   ndSC("TopVar", name, [self.parseExpr()])
 }
 
+fn countExternParams(mutref p: Parser) -> Int {
+  if p.at("RParen") { return 0 }
+  p.expectIdent("param")
+  if p.eat("Colon") { p.skipType() }
+  var pc = 1
+  loop {
+    if not p.eat("Comma") { return pc }
+    p.expectIdent("param")
+    if p.eat("Colon") { p.skipType() }
+    pc = pc + 1
+  }
+}
+
+fn Parser.parseExternFn(mutref self) -> Node {
+  self.expect("extern", "extern")
+  self.expect("fn", "extern fn")
+  val name = self.expectIdent("extern fn")
+  self.expect("LParen", "extern fn")
+  val pc = countExternParams(mutref self)
+  self.expect("RParen", "extern fn")
+  var hr = 1
+  if self.eat("Arrow") {
+    val rt = self.skipType()
+    if rt == "Unit" { hr = 0 }
+  }
+  ndSI("ExternFn", name, [ndI("pc", pc)], [ndI("hr", hr)])
+}
+
 // ── Blocks / Stmts ──
 
 fn Parser.parseBlock(mutref self) -> List<Node> {
@@ -584,18 +673,20 @@ fn Parser.parseBlock(mutref self) -> List<Node> {
   stmts
 }
 fn pBlockLoop(mutref p: Parser, mutref ss: List<Node>) {
-  if p.at("RBrace") { return }
-  ss.push(p.parseStmt())
-  pBlockLoop(mutref p, mutref ss)
+  loop {
+    if p.at("RBrace") { return }
+    ss.push(p.parseStmt())
+  }
 }
 
 fn Parser.parseStmt(mutref self) -> Node {
   val ty = self.peekTy()
   if ty == "val" { return self.parseValStmt() }
   if ty == "var" { return self.parseVarStmt() }
-  if ty == "return" { self.advance() if self.at("RBrace") or self.atEof() { return ndC("Return", []) } return ndC("Return", [self.parseExpr()]) }
+  if ty == "return" { self.advance() if self.at("RBrace") { return ndC("Return", []) } if self.atEof() { return ndC("Return", []) } return ndC("Return", [self.parseExpr()]) }
   if ty == "if" { return self.parseIfStmt() }
   if ty == "for" { return self.parseForStmt() }
+  if ty == "loop" { return self.parseLoopStmt() }
   if ty == "defer" { self.advance() return ndC("Defer", [self.parseExpr()]) }
   val e = self.parseExpr()
   if self.eat("Eq") { return ndC("Assign", [e, self.parseExpr()]) }
@@ -613,16 +704,18 @@ fn Parser.parseValStmt(mutref self) -> Node {
     self.expect("Eq", "vt")
     return ndC("ValTuple", [self.parseExpr(), ndC("Names", ns)])
   }
-  if self.peekTy() == "ref" or self.peekTy() == "mutref" { self.advance() }
+  if self.peekTy() == "ref" { self.advance() }
+  else if self.peekTy() == "mutref" { self.advance() }
   val name = self.expectIdent("val")
   if self.eat("Colon") { self.skipType() }
   self.expect("Eq", "val")
   ndSC("Val", name, [self.parseExpr()])
 }
 fn pVtNames(mutref p: Parser, mutref ns: List<Node>) {
-  if not p.eat("Comma") { return }
-  ns.push(ndS("N", p.expectIdent("vt")))
-  pVtNames(mutref p, mutref ns)
+  loop {
+    if not p.eat("Comma") { return }
+    ns.push(ndS("N", p.expectIdent("vt")))
+  }
 }
 
 fn Parser.parseVarStmt(mutref self) -> Node {
@@ -659,6 +752,11 @@ fn Parser.parseForStmt(mutref self) -> Node {
   ndSC("For", v, [iter, ndC("Body", self.parseBlock())])
 }
 
+fn Parser.parseLoopStmt(mutref self) -> Node {
+  self.advance()
+  ndC("Loop", self.parseBlock())
+}
+
 // ── Expressions ──
 
 fn Parser.parseExpr(mutref self) -> Node { self.parseElvis() }
@@ -673,9 +771,10 @@ fn Parser.parseOr(mutref self) -> Node {
   l
 }
 fn pOrLoop(mutref p: Parser, mutref l: Node) {
-  if not p.eat("or") { return }
-  l = ndSC("BinOp", "or", [l, p.parseAnd()])
-  pOrLoop(mutref p, mutref l)
+  loop {
+    if not p.eat("or") { return }
+    l = ndSC("BinOp", "or", [l, p.parseAnd()])
+  }
 }
 fn Parser.parseAnd(mutref self) -> Node {
   var l = self.parseNot()
@@ -683,9 +782,10 @@ fn Parser.parseAnd(mutref self) -> Node {
   l
 }
 fn pAndLoop(mutref p: Parser, mutref l: Node) {
-  if not p.eat("and") { return }
-  l = ndSC("BinOp", "and", [l, p.parseNot()])
-  pAndLoop(mutref p, mutref l)
+  loop {
+    if not p.eat("and") { return }
+    l = ndSC("BinOp", "and", [l, p.parseNot()])
+  }
 }
 fn Parser.parseNot(mutref self) -> Node {
   if self.eat("not") { return ndC("UnaryNot", [self.parseNot()]) }
@@ -708,8 +808,11 @@ fn Parser.parseAdd(mutref self) -> Node {
   l
 }
 fn pAddLoop(mutref p: Parser, mutref l: Node) {
-  if p.eat("Plus") { l = ndSC("BinOp", "+", [l, p.parseMul()]) pAddLoop(mutref p, mutref l) }
-  else if p.eat("Minus") { l = ndSC("BinOp", "-", [l, p.parseMul()]) pAddLoop(mutref p, mutref l) }
+  loop {
+    if p.eat("Plus") { l = ndSC("BinOp", "+", [l, p.parseMul()]) }
+    else if p.eat("Minus") { l = ndSC("BinOp", "-", [l, p.parseMul()]) }
+    else { return }
+  }
 }
 fn Parser.parseMul(mutref self) -> Node {
   var l = self.parseUnary()
@@ -717,9 +820,12 @@ fn Parser.parseMul(mutref self) -> Node {
   l
 }
 fn pMulLoop(mutref p: Parser, mutref l: Node) {
-  if p.eat("Star") { l = ndSC("BinOp", "*", [l, p.parseUnary()]) pMulLoop(mutref p, mutref l) }
-  else if p.eat("Slash") { l = ndSC("BinOp", "/", [l, p.parseUnary()]) pMulLoop(mutref p, mutref l) }
-  else if p.eat("Percent") { l = ndSC("BinOp", "%", [l, p.parseUnary()]) pMulLoop(mutref p, mutref l) }
+  loop {
+    if p.eat("Star") { l = ndSC("BinOp", "*", [l, p.parseUnary()]) }
+    else if p.eat("Slash") { l = ndSC("BinOp", "/", [l, p.parseUnary()]) }
+    else if p.eat("Percent") { l = ndSC("BinOp", "%", [l, p.parseUnary()]) }
+    else { return }
+  }
 }
 fn Parser.parseUnary(mutref self) -> Node {
   if self.eat("Minus") { return ndC("Neg", [self.parseUnary()]) }
@@ -734,11 +840,14 @@ fn Parser.parsePostfix(mutref self) -> Node {
   e
 }
 fn pPostLoop(mutref p: Parser, mutref e: Node) {
-  if p.eat("Dot") { e = ndSC("Field", p.expectIdent("field"), [e]) pPostLoop(mutref p, mutref e) return }
-  if p.eat("QuestionDot") { e = ndSC("OptChain", p.expectIdent("?."), [e]) pPostLoop(mutref p, mutref e) return }
-  if p.at("Question") { p.advance() e = ndC("Question", [e]) pPostLoop(mutref p, mutref e) return }
-  if p.at("LParen") { e = p.parseCall(e) pPostLoop(mutref p, mutref e) return }
-  if p.at("LBrace") and p.allowBrace and p.isLambda() { e = ndC("Call", [e, p.parseLambda()]) pPostLoop(mutref p, mutref e) return }
+  loop {
+    if p.eat("Dot") { e = ndSC("Field", p.expectIdent("field"), [e]) }
+    else if p.eat("QuestionDot") { e = ndSC("OptChain", p.expectIdent("?."), [e]) }
+    else if p.at("Question") { p.advance() e = ndC("Question", [e]) }
+    else if p.at("LParen") { e = p.parseCall(e) }
+    else if p.at("LBrace") { if p.allowBrace { if p.isLambda() { e = ndC("Call", [e, p.parseLambda()]) } } }
+    else { return }
+  }
 }
 
 fn Parser.parseCall(mutref self, callee: Node) -> Node {
@@ -746,13 +855,14 @@ fn Parser.parseCall(mutref self, callee: Node) -> Node {
   var args: List<Node> = [callee]
   if not self.at("RParen") { args.push(self.parseExpr()) pCallArgs(mutref self, mutref args) }
   self.expect("RParen", "call")
-  if self.at("LBrace") and self.allowBrace and self.isLambda() { args.push(self.parseLambda()) }
+  if self.at("LBrace") { if self.allowBrace { if self.isLambda() { args.push(self.parseLambda()) } } }
   ndC("Call", args)
 }
 fn pCallArgs(mutref p: Parser, mutref a: List<Node>) {
-  if not p.eat("Comma") { return }
-  a.push(p.parseExpr())
-  pCallArgs(mutref p, mutref a)
+  loop {
+    if not p.eat("Comma") { return }
+    a.push(p.parseExpr())
+  }
 }
 
 fn Parser.parsePrimary(mutref self) -> Node {
@@ -784,9 +894,10 @@ fn Parser.parsePrimary(mutref self) -> Node {
   panic(f"expected expr, got {ty} at line {self.tokens.get(self.pos).line}")
 }
 fn pTupleLoop(mutref p: Parser, mutref es: List<Node>) {
-  if not p.eat("Comma") { return }
-  es.push(p.parseExpr())
-  pTupleLoop(mutref p, mutref es)
+  loop {
+    if not p.eat("Comma") { return }
+    es.push(p.parseExpr())
+  }
 }
 
 fn Parser.parseListLit(mutref self) -> Node {
@@ -797,10 +908,11 @@ fn Parser.parseListLit(mutref self) -> Node {
   ndC("ListLit", es)
 }
 fn pListLoop(mutref p: Parser, mutref es: List<Node>) {
-  if not p.eat("Comma") { return }
-  if p.at("RBracket") { return }
-  es.push(p.parseExpr())
-  pListLoop(mutref p, mutref es)
+  loop {
+    if not p.eat("Comma") { return }
+    if p.at("RBracket") { return }
+    es.push(p.parseExpr())
+  }
 }
 
 fn Parser.parseMatchExpr(mutref self) -> Node {
@@ -816,11 +928,12 @@ fn Parser.parseMatchExpr(mutref self) -> Node {
   ndC("Match", arms)
 }
 fn pMatchArms(mutref p: Parser, mutref a: List<Node>) {
-  if p.at("RBrace") { return }
-  val pat = p.parsePattern()
-  p.expect("FatArrow", "match arm")
-  a.push(ndC("Arm", [pat, p.parseExpr()]))
-  pMatchArms(mutref p, mutref a)
+  loop {
+    if p.at("RBrace") { return }
+    val pat = p.parsePattern()
+    p.expect("FatArrow", "match arm")
+    a.push(ndC("Arm", [pat, p.parseExpr()]))
+  }
 }
 
 fn Parser.parsePattern(mutref self) -> Node {
@@ -853,19 +966,22 @@ fn Parser.parsePattern(mutref self) -> Node {
   panic(f"expected pattern, got {ty}")
 }
 fn pDotName(mutref p: Parser, mutref n: String) {
-  if not p.eat("Dot") { return }
-  n = n + "." + p.expectIdent("dot")
-  pDotName(mutref p, mutref n)
+  loop {
+    if not p.eat("Dot") { return }
+    n = n + "." + p.expectIdent("dot")
+  }
 }
 fn pPatArgs(mutref p: Parser, mutref a: List<Node>) {
-  if not p.eat("Comma") { return }
-  a.push(p.parsePattern())
-  pPatArgs(mutref p, mutref a)
+  loop {
+    if not p.eat("Comma") { return }
+    a.push(p.parsePattern())
+  }
 }
 fn pPatTuple(mutref p: Parser, mutref es: List<Node>) {
-  if not p.eat("Comma") { return }
-  es.push(p.parsePattern())
-  pPatTuple(mutref p, mutref es)
+  loop {
+    if not p.eat("Comma") { return }
+    es.push(p.parsePattern())
+  }
 }
 
 fn Parser.parseWhenExpr(mutref self) -> Node {
@@ -877,19 +993,20 @@ fn Parser.parseWhenExpr(mutref self) -> Node {
   ndC("When", arms)
 }
 fn pWhenArms(mutref p: Parser, mutref a: List<Node>) {
-  if p.at("RBrace") { return }
-  if p.eat("else") {
-    p.expect("FatArrow", "when else")
-    a.push(ndC("WE", [p.parseExpr()]))
-  } else {
-    val saved = p.allowBrace
-    p.allowBrace = false
-    val cond = p.parseExpr()
-    p.allowBrace = saved
-    p.expect("FatArrow", "when arm")
-    a.push(ndC("WA", [cond, p.parseExpr()]))
+  loop {
+    if p.at("RBrace") { return }
+    if p.eat("else") {
+      p.expect("FatArrow", "when else")
+      a.push(ndC("WE", [p.parseExpr()]))
+    } else {
+      val saved = p.allowBrace
+      p.allowBrace = false
+      val cond = p.parseExpr()
+      p.allowBrace = saved
+      p.expect("FatArrow", "when arm")
+      a.push(ndC("WA", [cond, p.parseExpr()]))
+    }
   }
-  pWhenArms(mutref p, mutref a)
 }
 
 // ── Lambda ──
@@ -904,11 +1021,12 @@ fn Parser.isLambda(ref self) -> Bool {
   self.tokens.get(i).ty == "FatArrow"
 }
 fn isLamLoop(toks: List<Token>, mutref i: Int) {
-  if toks.get(i).ty != "Comma" { return }
-  i = i + 1
-  if toks.get(i).ty != "Ident" { return }
-  i = i + 1
-  isLamLoop(toks, mutref i)
+  loop {
+    if toks.get(i).ty != "Comma" { return }
+    i = i + 1
+    if toks.get(i).ty != "Ident" { return }
+    i = i + 1
+  }
 }
 fn Parser.parseLambda(mutref self) -> Node {
   self.expect("LBrace", "lam")
@@ -922,14 +1040,16 @@ fn Parser.parseLambda(mutref self) -> Node {
   ndC("Lambda", [ndC("Ps", ps), ndC("Bd", body)])
 }
 fn pLamPs(mutref p: Parser, mutref ps: List<Node>) {
-  if not p.eat("Comma") { return }
-  ps.push(ndS("P", p.expectIdent("lam")))
-  pLamPs(mutref p, mutref ps)
+  loop {
+    if not p.eat("Comma") { return }
+    ps.push(ndS("P", p.expectIdent("lam")))
+  }
 }
 fn pLamBody(mutref p: Parser, mutref b: List<Node>) {
-  if p.at("RBrace") { return }
-  b.push(p.parseStmt())
-  pLamBody(mutref p, mutref b)
+  loop {
+    if p.at("RBrace") { return }
+    b.push(p.parseStmt())
+  }
 }
 
 
@@ -1177,10 +1297,10 @@ fn cgExpr(mutref c: Compiler, e: Node) -> Int {
     return rt1(mutref c, "fuse_rt_bool", cl_icmp(c.bld, 0, tr, cl_iconst_i8(c.bld, 0)))
   }
   if e.kind == "Move" {
-    if e.children.get(0).kind == "Ident" { c.destroyed.push(e.children.get(0).sval) }
     return cgExpr(mutref c, e.children.get(0))
   }
-  if e.kind == "Ref" or e.kind == "Mutref" { return cgExpr(mutref c, e.children.get(0)) }
+  if e.kind == "Ref" { return cgExpr(mutref c, e.children.get(0)) }
+  if e.kind == "Mutref" { return cgExpr(mutref c, e.children.get(0)) }
   if e.kind == "Field" { return cgField(mutref c, e) }
   if e.kind == "OptChain" { return cgOptChain(mutref c, e) }
   if e.kind == "Question" { return cgQuestion(mutref c, e) }
@@ -1189,7 +1309,12 @@ fn cgExpr(mutref c: Compiler, e: Node) -> Int {
   if e.kind == "Match" { return cgMatch(mutref c, e) }
   if e.kind == "When" { return cgWhen(mutref c, e) }
   if e.kind == "FString" { return cgFStr(mutref c, e) }
-  if e.kind == "ListLit" or e.kind == "Tuple" {
+  if e.kind == "ListLit" {
+    val l = rt0(mutref c, "fuse_rt_list_new")
+    for ch in e.children { rt2(mutref c, "fuse_rt_list_push", l, cgExpr(mutref c, ch)) }
+    return l
+  }
+  if e.kind == "Tuple" {
     val l = rt0(mutref c, "fuse_rt_list_new")
     for ch in e.children { rt2(mutref c, "fuse_rt_list_push", l, cgExpr(mutref c, ch)) }
     return l
@@ -1402,18 +1527,18 @@ fn cgCall(mutref c: Compiler, e: Node) -> Int {
 fn cgCallInner(mutref c: Compiler, callee: Node, args: List<Int>) -> Int {
   if callee.kind == "Ident" {
     val n = callee.sval
-    if n == "println" and args.len() > 0 { rt1(mutref c, "fuse_rt_println", args.get(0))
-  return rt0(mutref c, "fuse_rt_unit") }
-    if n == "eprintln" and args.len() > 0 { rt1(mutref c, "fuse_rt_eprintln", args.get(0))
-  return rt0(mutref c, "fuse_rt_unit") }
-    if n == "exit" and args.len() > 0 { rt1(mutref c, "fuse_rt_exit", rt1(mutref c, "fuse_rt_as_int", args.get(0)))
-  return rt0(mutref c, "fuse_rt_unit") }
-    if n == "panic" and args.len() > 0 { rt1(mutref c, "fuse_rt_eprintln", args.get(0))
+    if n == "println" { if args.len() > 0 { rt1(mutref c, "fuse_rt_println", args.get(0))
+  return rt0(mutref c, "fuse_rt_unit") } }
+    if n == "eprintln" { if args.len() > 0 { rt1(mutref c, "fuse_rt_eprintln", args.get(0))
+  return rt0(mutref c, "fuse_rt_unit") } }
+    if n == "exit" { if args.len() > 0 { rt1(mutref c, "fuse_rt_exit", rt1(mutref c, "fuse_rt_as_int", args.get(0)))
+  return rt0(mutref c, "fuse_rt_unit") } }
+    if n == "panic" { if args.len() > 0 { rt1(mutref c, "fuse_rt_eprintln", args.get(0))
   rt1(mutref c, "fuse_rt_exit", cl_iconst(c.bld, 1))
-  return rt0(mutref c, "fuse_rt_unit") }
-    if n == "Ok" and args.len() > 0 { return rt1(mutref c, "fuse_rt_ok", args.get(0)) }
-    if n == "Err" and args.len() > 0 { return rt1(mutref c, "fuse_rt_err", args.get(0)) }
-    if n == "Some" and args.len() > 0 { return rt1(mutref c, "fuse_rt_some", args.get(0)) }
+  return rt0(mutref c, "fuse_rt_unit") } }
+    if n == "Ok" { if args.len() > 0 { return rt1(mutref c, "fuse_rt_ok", args.get(0)) } }
+    if n == "Err" { if args.len() > 0 { return rt1(mutref c, "fuse_rt_err", args.get(0)) } }
+    if n == "Some" { if args.len() > 0 { return rt1(mutref c, "fuse_rt_some", args.get(0)) } }
     // Struct/DC construction
     for st in c.structs { if st.sval == n { return cgStructCon(mutref c, n, args, st) } }
     for dc in c.dcs { if dc.sval == n { return cgStructCon(mutref c, n, args, dc) } }
@@ -1454,51 +1579,51 @@ fn cgMethodInner(mutref c: Compiler, oe: Node, mn: String, args: List<Int>) -> I
     for en in c.enums {
       if en.sval == oe.sval {
         for v in en.children {
-          if v.sval == mn and v.children.len() > 0 {
+          if v.sval == mn { if v.children.len() > 0 {
             var payload = cl_iconst(c.bld, 0)
             if args.len() > 0 { payload = args.get(0) }
             return rt5(mutref c, "fuse_rt_enum_variant", sConst(mutref c, oe.sval), cl_iconst(c.bld, oe.sval.len()), sConst(mutref c, mn), cl_iconst(c.bld, mn.len()), payload)
-          }
+          } }
         }
       }
     }
   }
   val obj = cgExpr(mutref c, oe)
   if mn == "len" { return rt1(mutref c, "fuse_rt_len", obj) }
-  if mn == "get" and args.len() > 0 { return rt2(mutref c, "fuse_rt_list_get", obj, args.get(0)) }
-  if mn == "push" and args.len() > 0 { rt2(mutref c, "fuse_rt_list_push", obj, args.get(0))
-  return rt0(mutref c, "fuse_rt_unit") }
-  if mn == "set" and args.len() >= 2 { rt3(mutref c, "fuse_rt_list_set", obj, args.get(0), args.get(1))
-  return rt0(mutref c, "fuse_rt_unit") }
-  if mn == "contains" and args.len() > 0 { return rt2(mutref c, "fuse_rt_contains", obj, args.get(0)) }
+  if mn == "get" { if args.len() > 0 { return rt2(mutref c, "fuse_rt_list_get", obj, args.get(0)) } }
+  if mn == "push" { if args.len() > 0 { rt2(mutref c, "fuse_rt_list_push", obj, args.get(0))
+  return rt0(mutref c, "fuse_rt_unit") } }
+  if mn == "set" { if args.len() >= 2 { rt3(mutref c, "fuse_rt_list_set", obj, args.get(0), args.get(1))
+  return rt0(mutref c, "fuse_rt_unit") } }
+  if mn == "contains" { if args.len() > 0 { return rt2(mutref c, "fuse_rt_contains", obj, args.get(0)) } }
   if mn == "first" { return rt1(mutref c, "fuse_rt_list_first", obj) }
   if mn == "last" { return rt1(mutref c, "fuse_rt_list_last", obj) }
   if mn == "sum" { return rt1(mutref c, "fuse_rt_list_sum", obj) }
   if mn == "sorted" { return rt1(mutref c, "fuse_rt_list_sorted", obj) }
   if mn == "isEmpty" { return rt1(mutref c, "fuse_rt_list_is_empty", obj) }
-  if mn == "charAt" and args.len() > 0 { return rt2(mutref c, "fuse_rt_str_char_at", obj, args.get(0)) }
-  if mn == "substring" and args.len() >= 2 { return rt3(mutref c, "fuse_rt_str_substring", obj, args.get(0), args.get(1)) }
-  if mn == "startsWith" and args.len() > 0 { return rt2(mutref c, "fuse_rt_str_starts_with", obj, args.get(0)) }
-  if mn == "charCodeAt" and args.len() > 0 { return rt2(mutref c, "fuse_rt_str_char_code_at", obj, args.get(0)) }
-  if mn == "split" and args.len() > 0 { return rt2(mutref c, "fuse_rt_str_split", obj, args.get(0)) }
+  if mn == "charAt" { if args.len() > 0 { return rt2(mutref c, "fuse_rt_str_char_at", obj, args.get(0)) } }
+  if mn == "substring" { if args.len() >= 2 { return rt3(mutref c, "fuse_rt_str_substring", obj, args.get(0), args.get(1)) } }
+  if mn == "startsWith" { if args.len() > 0 { return rt2(mutref c, "fuse_rt_str_starts_with", obj, args.get(0)) } }
+  if mn == "charCodeAt" { if args.len() > 0 { return rt2(mutref c, "fuse_rt_str_char_code_at", obj, args.get(0)) } }
+  if mn == "split" { if args.len() > 0 { return rt2(mutref c, "fuse_rt_str_split", obj, args.get(0)) } }
   if mn == "trim" { return rt1(mutref c, "fuse_rt_str_trim", obj) }
-  if mn == "replace" and args.len() >= 2 { return rt3(mutref c, "fuse_rt_str_replace", obj, args.get(0), args.get(1)) }
+  if mn == "replace" { if args.len() >= 2 { return rt3(mutref c, "fuse_rt_str_replace", obj, args.get(0), args.get(1)) } }
   if mn == "toUpper" { return rt1(mutref c, "fuse_rt_str_to_upper", obj) }
   if mn == "toLower" { return rt1(mutref c, "fuse_rt_str_to_lower", obj) }
   if mn == "toFloat" { return rt1(mutref c, "fuse_rt_int_to_float", obj) }
   if mn == "toString" { return rt1(mutref c, "fuse_rt_to_display_string", obj) }
   if mn == "isEven" { return rt1(mutref c, "fuse_rt_int_is_even", obj) }
-  if mn == "map" and args.len() > 0 { return rt3(mutref c, "fuse_rt_list_map_fn", obj, args.get(0), cl_iconst(c.bld, 0)) }
-  if mn == "filter" and args.len() > 0 { return rt3(mutref c, "fuse_rt_list_filter_fn", obj, args.get(0), cl_iconst(c.bld, 0)) }
-  if mn == "retainWhere" and args.len() > 0 { rt3(mutref c, "fuse_rt_list_retain_fn", obj, args.get(0), cl_iconst(c.bld, 0))
-  return rt0(mutref c, "fuse_rt_unit") }
+  if mn == "map" { if args.len() > 0 { return rt3(mutref c, "fuse_rt_list_map_fn", obj, args.get(0), cl_iconst(c.bld, 0)) } }
+  if mn == "filter" { if args.len() > 0 { return rt3(mutref c, "fuse_rt_list_filter_fn", obj, args.get(0), cl_iconst(c.bld, 0)) } }
+  if mn == "retainWhere" { if args.len() > 0 { rt3(mutref c, "fuse_rt_list_retain_fn", obj, args.get(0), cl_iconst(c.bld, 0))
+  return rt0(mutref c, "fuse_rt_unit") } }
   // Extension function search
   var all: List<Int> = [obj]
   for a in args { all.push(a) }
   for f in c.funcs {
-    if f.name.contains(f"_{mn}") and f.name.startsWith("fuse_ext_") {
+    if f.name.contains(f"_{mn}") { if f.name.startsWith("fuse_ext_") {
       return cl_call(c.ctx, c.bld, f.handle, all, all.len())
-    }
+    } }
   }
   rt0(mutref c, "fuse_rt_unit")
 }
@@ -1522,7 +1647,10 @@ fn cgMatch(mutref c: Compiler, e: Node) -> Int {
     val next = cl_block_new(c.bld)
     if pat.kind == "PW" { cl_jump(c.bld, bb, 0, 0) }
     else if pat.kind == "PI" {
-      if pat.sval.contains(".") or pat.sval == "None" {
+      var isPV = false
+      if pat.sval.contains(".") { isPV = true }
+      if pat.sval == "None" { isPV = true }
+      if isPV {
         val vs = rt1(mutref c, "fuse_rt_variant_name", sv)
         var en = pat.sval
         if en == "None" { en = "Option.None" }
@@ -1538,7 +1666,21 @@ fn cgMatch(mutref c: Compiler, e: Node) -> Int {
       if mn == "Some" { mn = "Option.Some" }
       val eq = rt1(mutref c, "fuse_rt_is_truthy", rt2(mutref c, "fuse_rt_eq", vs, makeStr(mutref c, mn)))
       if last { cl_jump(c.bld, bb, 0, 0) } else { cl_brif(c.bld, eq, bb, next) }
-    } else if pat.kind == "PN" or pat.kind == "PS" or pat.kind == "PB" {
+    } else if pat.kind == "PN" {
+      var lv = rt0(mutref c, "fuse_rt_unit")
+      if pat.kind == "PN" { lv = rt1(mutref c, "fuse_rt_int", cl_iconst(c.bld, pat.ival)) }
+      if pat.kind == "PS" { lv = makeStr(mutref c, pat.sval) }
+      if pat.kind == "PB" { lv = rt1(mutref c, "fuse_rt_bool", cl_iconst_i8(c.bld, when { pat.bval => 1 else => 0 })) }
+      val eq = rt1(mutref c, "fuse_rt_is_truthy", rt2(mutref c, "fuse_rt_eq", sv, lv))
+      if last { cl_jump(c.bld, bb, 0, 0) } else { cl_brif(c.bld, eq, bb, next) }
+    } else if pat.kind == "PS" {
+      var lv = rt0(mutref c, "fuse_rt_unit")
+      if pat.kind == "PN" { lv = rt1(mutref c, "fuse_rt_int", cl_iconst(c.bld, pat.ival)) }
+      if pat.kind == "PS" { lv = makeStr(mutref c, pat.sval) }
+      if pat.kind == "PB" { lv = rt1(mutref c, "fuse_rt_bool", cl_iconst_i8(c.bld, when { pat.bval => 1 else => 0 })) }
+      val eq = rt1(mutref c, "fuse_rt_is_truthy", rt2(mutref c, "fuse_rt_eq", sv, lv))
+      if last { cl_jump(c.bld, bb, 0, 0) } else { cl_brif(c.bld, eq, bb, next) }
+    } else if pat.kind == "PB" {
       var lv = rt0(mutref c, "fuse_rt_unit")
       if pat.kind == "PN" { lv = rt1(mutref c, "fuse_rt_int", cl_iconst(c.bld, pat.ival)) }
       if pat.kind == "PS" { lv = makeStr(mutref c, pat.sval) }
@@ -1548,10 +1690,10 @@ fn cgMatch(mutref c: Compiler, e: Node) -> Int {
     } else { cl_jump(c.bld, bb, 0, 0) }
     cl_block_switch(c.bld, bb)
     cl_block_seal(c.bld, bb)
-    if pat.kind == "PC" and pat.children.len() > 0 {
+    if pat.kind == "PC" { if pat.children.len() > 0 {
       val inner = rt1(mutref c, "fuse_rt_unwrap_enum", sv)
       cgBindSub(mutref c, pat.children, inner)
-    }
+    } }
     val bv = cgExpr(mutref c, body)
     if not c.terminated { val bA = [bv]
   cl_jump(c.bld, mb, bA, 1) }
@@ -1565,9 +1707,9 @@ fn cgMatch(mutref c: Compiler, e: Node) -> Int {
 fn cgBindSub(mutref c: Compiler, pats: List<Node>, v: Int) {
   for p in pats {
     if p.kind == "PI" { defVar(mutref c, p.sval, v) }
-    else if p.kind == "PC" and p.children.len() > 0 {
+    else if p.kind == "PC" { if p.children.len() > 0 {
       cgBindSub(mutref c, p.children, rt1(mutref c, "fuse_rt_unwrap_enum", v))
-    }
+    } }
   }
 }
 
@@ -1615,7 +1757,9 @@ fn cgStmts(mutref c: Compiler, ss: List<Node>) -> Int {
 }
 
 fn cgStmt(mutref c: Compiler, s: Node) -> Int {
-  if s.kind == "Val" or s.kind == "Var" { defVar(mutref c, s.sval, cgExpr(mutref c, s.children.get(0)))
+  if s.kind == "Val" { defVar(mutref c, s.sval, cgExpr(mutref c, s.children.get(0)))
+  return -1 }
+  if s.kind == "Var" { defVar(mutref c, s.sval, cgExpr(mutref c, s.children.get(0)))
   return -1 }
   if s.kind == "ValTuple" {
     val v = cgExpr(mutref c, s.children.get(0))
@@ -1657,6 +1801,7 @@ fn cgStmt(mutref c: Compiler, s: Node) -> Int {
   }
   if s.kind == "If" { return cgIf(mutref c, s) }
   if s.kind == "For" { return cgFor(mutref c, s) }
+  if s.kind == "Loop" { return cgLoop(mutref c, s) }
   if s.kind == "Defer" { c.defers.push(s.children.get(0))
   return -1 }
   -1
@@ -1727,13 +1872,27 @@ fn cgFor(mutref c: Compiler, s: Node) -> Int {
 }
 
 
+fn cgLoop(mutref c: Compiler, s: Node) -> Int {
+  val hdr = cl_block_new(c.bld)
+  val ext = cl_block_new(c.bld)
+  cl_jump(c.bld, hdr, 0, 0)
+  cl_block_switch(c.bld, hdr)
+  c.terminated = false
+  cgStmts(mutref c, s.children)
+  if not c.terminated { cl_jump(c.bld, hdr, 0, 0) }
+  c.terminated = false
+  cl_block_seal(c.bld, hdr)
+  cl_block_switch(c.bld, ext)
+  cl_block_seal(c.bld, ext)
+  -1
+}
+
+
 // =============================================================================
 // Section 8: Compile program and generate main
 // =============================================================================
 
 fn compileProg(mutref c: Compiler, prog: Node) {
-  eprintln(f"compileProg: kind={prog.kind}")
-  eprintln(f"compileProg: children count={prog.children.len()}")
   // Collect declarations
   for d in prog.children {
     if d.kind == "EnumDecl" { c.enums.push(d) }
@@ -1748,6 +1907,14 @@ fn compileProg(mutref c: Compiler, prog: Node) {
     if d.kind == "FnDecl" {
       val info = d.sval.split("|")
       if info.get(1) != "" { c.extFns.push(d) }
+    }
+  }
+  // Import extern functions
+  for d in prog.children {
+    if d.kind == "ExternFn" {
+      val pc = d.children.get(0).ival
+      val hr = d.items.get(0).ival
+      importRt(mutref c, d.sval, pc, hr)
     }
   }
   // Declare all functions
@@ -1850,10 +2017,10 @@ fn cgLamBody(mutref c: Compiler, lam: Node, idx: Int) {
 fn cgMain(mutref c: Compiler, prog: Node) {
   var en = ""
   for d in prog.children {
-    if d.kind == "FnDecl" and d.bval {
+    if d.kind == "FnDecl" { if d.bval {
       val parts = d.sval.split("|")
       en = f"fuse_{parts.get(0)}"
-    }
+    } }
   }
   if en == "" { return }
   val mh = cl_declare_func(c.ctx, "main", 4, 0, 1)
@@ -1888,47 +2055,58 @@ fn cgMain(mutref c: Compiler, prog: Node) {
 
 @entrypoint
 fn main() -> Result<(), String> {
+  eprintln("FUSEC2 STARTING")
   val cmdArgs = args()
+  eprintln(f"GOT {cmdArgs.len()} ARGS")
   var sourceFile = ""
   var outputFile = ""
+  var libPath = ""
   var skipNext = false
+  var skipKind = ""
+  eprintln("BEFORE FOR LOOP")
   for arg in cmdArgs {
+    eprintln(f"ARG: {arg}")
     if skipNext {
-      outputFile = arg
+      if skipKind == "o" { outputFile = arg }
+      if skipKind == "lib" { libPath = arg }
       skipNext = false
     } else if arg == "-o" {
       skipNext = true
-    } else if not arg.startsWith("-") and sourceFile == "" {
-      // Skip argv[0] (the executable name) by checking if it looks like a .fuse file
-      if arg.contains(".fuse") {
-        sourceFile = arg
-      }
-    }
+      skipKind = "o"
+    } else if arg == "--lib" {
+      skipNext = true
+      skipKind = "lib"
+    } else if arg.contains(".fuse") { if sourceFile == "" {
+      sourceFile = arg
+    } }
   }
+  eprintln(f"AFTER FOR: src='{sourceFile}' out='{outputFile}'")
   if sourceFile == "" {
-    eprintln("Usage: fusec2 <file.fuse> [-o output]")
+    eprintln("Usage: fusec2 <file.fuse> [-o output] [--lib path]")
     exit(1)
   }
+  eprintln("BEFORE REPLACE")
   if outputFile == "" {
     outputFile = sourceFile.replace(".fuse", "")
   }
-  eprintln(f"S2: reading {sourceFile}")
+  eprintln(f"READING: {sourceFile}")
   val source = readFile(sourceFile)?
-  eprintln(f"S2: tokenizing ({source.len()} chars)")
+  eprintln(f"TOKENIZING {source.len()} chars")
   val tokens = tokenize(source)
-  eprintln(f"S2: got {tokens.len()} tokens")
-  eprintln(f"S2: first token type = {tokens.get(0).ty}")
+  eprintln(f"GOT {tokens.len()} tokens")
   var parser = newParser(tokens)
-  eprintln("S2: parser created, parsing...")
   val program = parser.parseProgram()
-  eprintln(f"S2: parsed, program.kind={program.kind}")
   var compiler = newCompiler()
   importAllRt(mutref compiler)
-  eprintln("S2: compiling...")
   compileProg(mutref compiler, program)
   cgMain(mutref compiler, program)
   val objPath = f"{outputFile}.o"
   cl_module_finish(compiler.ctx, objPath, objPath.len())
-  eprintln(f"Compiled: {objPath}")
+  if libPath == "" {
+    eprintln(f"Object written: {objPath} (no --lib given, skipping link)")
+    return Ok(())
+  }
+  val rc = cl_link(objPath, objPath.len(), outputFile, outputFile.len(), libPath, libPath.len())
+  if rc != 0 { return Err(f"link failed (exit {rc})") }
   Ok(())
 }

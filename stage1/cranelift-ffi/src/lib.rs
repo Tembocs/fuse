@@ -496,7 +496,7 @@ pub extern "C" fn cl_func_addr(ctx: *mut ClContext, bld: *mut ClBuilder, func_ha
 // ═════════════════════════════════════════════════════════════════════
 
 /// Link an object file with libraries into an executable.
-/// lib_paths is an array of (ptr, len) pairs.
+/// `lib_path` may contain multiple library paths separated by semicolons.
 #[no_mangle]
 pub extern "C" fn cl_link(
     obj_path_ptr: *const u8, obj_path_len: i64,
@@ -505,20 +505,24 @@ pub extern "C" fn cl_link(
 ) -> i64 {
     let obj_path = unsafe { str_from_raw(obj_path_ptr, obj_path_len) };
     let out_path = unsafe { str_from_raw(out_path_ptr, out_path_len) };
-    let lib_path = unsafe { str_from_raw(lib_path_ptr, lib_path_len) };
+    let lib_path_str = unsafe { str_from_raw(lib_path_ptr, lib_path_len) };
+    let libs: Vec<&str> = lib_path_str.split(';').filter(|s| !s.is_empty()).collect();
 
-    // Use rustc as linker driver on MSVC, gcc otherwise.
     if cfg!(target_env = "msvc") {
         let stub_path = format!("{}.stub.rs", obj_path);
         std::fs::write(&stub_path, "#![no_main]").ok();
-        let status = std::process::Command::new("rustc")
-            .arg("--edition=2021")
+        let mut cmd = std::process::Command::new("rustc");
+        cmd.arg("--edition=2021")
             .arg("--crate-type=bin")
             .arg(&stub_path)
             .arg("-o").arg(&out_path)
-            .arg("-C").arg(format!("link-arg={}", obj_path))
-            .arg("-C").arg(format!("link-arg={}", lib_path))
-            .status();
+            .arg("-C").arg(format!("link-arg={}", obj_path));
+        for lib in &libs {
+            cmd.arg("-C").arg(format!("link-arg={}", lib));
+        }
+        // 8 MB stack — compilers have deep call stacks.
+        cmd.arg("-C").arg("link-arg=/STACK:8388608");
+        let status = cmd.status();
         let _ = std::fs::remove_file(&stub_path);
         match status {
             Ok(s) if s.success() => 0,
@@ -526,11 +530,20 @@ pub extern "C" fn cl_link(
         }
     } else {
         let linker = if cfg!(windows) { "gcc" } else { "cc" };
-        let status = std::process::Command::new(linker)
-            .arg(&obj_path).arg(&lib_path)
-            .arg("-o").arg(&out_path)
-            .arg("-lpthread").arg("-ldl").arg("-lm")
-            .status();
+        let mut cmd = std::process::Command::new(linker);
+        cmd.arg(&obj_path);
+        for lib in &libs {
+            cmd.arg(lib);
+        }
+        cmd.arg("-o").arg(&out_path);
+        if cfg!(target_os = "linux") {
+            cmd.arg("-lpthread").arg("-ldl").arg("-lm");
+            cmd.arg("-Wl,-z,stacksize=8388608");
+        } else if cfg!(target_os = "macos") {
+            cmd.arg("-lpthread").arg("-lm");
+            cmd.arg("-Wl,-stack_size,0x800000");
+        }
+        let status = cmd.status();
         match status {
             Ok(s) if s.success() => 0,
             _ => -1,

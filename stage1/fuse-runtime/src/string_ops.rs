@@ -25,17 +25,28 @@ pub fn fuse_int_is_even(v: &FuseValue) -> FuseValue {
 pub fn fuse_string_char_at(s: &FuseValue, idx: &FuseValue) -> FuseValue {
     let s = s.as_str();
     let i = idx.as_int() as usize;
-    if i < s.len() {
-        FuseValue::Str(s[i..i+1].to_string())
+    if i >= s.len() {
+        return FuseValue::Str(String::new());
+    }
+    // If i is not a char boundary, find the char that contains this byte.
+    if s.is_char_boundary(i) {
+        let ch = &s[i..].chars().next().unwrap();
+        FuseValue::Str(ch.to_string())
     } else {
-        FuseValue::Str(String::new())
+        // Inside a multi-byte char — return it as a replacement character.
+        FuseValue::Str("\u{FFFD}".to_string())
     }
 }
 
 pub fn fuse_string_substring(s: &FuseValue, start: &FuseValue, end: &FuseValue) -> FuseValue {
     let s = s.as_str();
-    let a = (start.as_int() as usize).min(s.len());
-    let b = (end.as_int() as usize).min(s.len());
+    let len = s.len();
+    let mut a = (start.as_int() as usize).min(len);
+    let mut b = (end.as_int() as usize).min(len);
+    // Snap to nearest char boundaries.
+    while a < len && !s.is_char_boundary(a) { a += 1; }
+    while b < len && !s.is_char_boundary(b) { b += 1; }
+    if b < a { b = a; }
     FuseValue::Str(s[a..b].to_string())
 }
 
@@ -50,11 +61,11 @@ pub fn fuse_string_contains(s: &FuseValue, needle: &FuseValue) -> FuseValue {
 pub fn fuse_string_char_code_at(s: &FuseValue, idx: &FuseValue) -> FuseValue {
     let s = s.as_str();
     let i = idx.as_int() as usize;
-    if i < s.len() {
-        FuseValue::Int(s.as_bytes()[i] as i64)
-    } else {
-        FuseValue::Int(-1)
+    if i >= s.len() {
+        return FuseValue::Int(-1);
     }
+    // Return the byte value at position i (used for ASCII classification).
+    FuseValue::Int(s.as_bytes()[i] as i64)
 }
 
 pub fn fuse_string_from_char_code(code: &FuseValue) -> FuseValue {

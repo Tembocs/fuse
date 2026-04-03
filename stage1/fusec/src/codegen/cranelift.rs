@@ -329,12 +329,14 @@ impl Codegen {
                     }
                 }
 
+                // Set mutref_cells before body so explicit `return` can write back.
+                ctx.mutref_cells = mutref_cells;
+
                 let result = match &f.body {
                     HirFnBody::Block(stmts) => ctx.stmts_asap(stmts),
                     HirFnBody::Expr(e) => Some(ctx.expr(e)),
                 };
                 if !ctx.terminated {
-                    ctx.mutref_cells = mutref_cells;
                     // Write mutref params back to their ref cells.
                     for (name, cell) in &ctx.mutref_cells.clone() {
                         if let Some(&var) = ctx.vars.get(name) {
@@ -1511,6 +1513,8 @@ fn link_msvc(obj_path: &str, rt_path: &str, cl_ffi: Option<&str>, output_path: &
         let cl_abs = std::fs::canonicalize(cl).unwrap_or_else(|_| cl.into());
         cmd.arg("-C").arg(format!("link-arg={}", cl_abs.display()));
     }
+    // 8 MB stack — compilers have deep call stacks.
+    cmd.arg("-C").arg("link-arg=/STACK:8388608");
     let result = cmd.status();
 
     let _ = std::fs::remove_file(&stub_path);
@@ -1537,8 +1541,10 @@ fn link_gcc(obj_path: &str, rt_path: &str, cl_ffi: Option<&str>, output_path: &s
 
     if cfg!(target_os = "linux") {
         cmd.arg("-lpthread").arg("-ldl").arg("-lm");
+        cmd.arg("-Wl,-z,stacksize=8388608");
     } else if cfg!(target_os = "macos") {
         cmd.arg("-lpthread").arg("-lm");
+        cmd.arg("-Wl,-stack_size,0x800000");
     } else if cfg!(windows) {
         cmd.arg("-lws2_32").arg("-luserenv").arg("-ladvapi32").arg("-lbcrypt").arg("-lntdll");
     }

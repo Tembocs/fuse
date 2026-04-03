@@ -743,6 +743,7 @@ fn main() -> Result<(), String> {
   val cmdArgs = args()
   var sourceFile = ""
   var outputFile = ""
+  var libPath = ""
   var i = 1
   loop {
     if i >= cmdArgs.len() { i = cmdArgs.len() + 1 }
@@ -750,13 +751,15 @@ fn main() -> Result<(), String> {
       val arg = cmdArgs.get(i)
       if arg == "-o" and i + 1 < cmdArgs.len() { i = i + 1
   outputFile = cmdArgs.get(i) }
+      else if arg == "--lib" and i + 1 < cmdArgs.len() { i = i + 1
+  libPath = cmdArgs.get(i) }
       else if sourceFile == "" { sourceFile = arg }
       i = i + 1
       i = i - 1
     }
     i = i + 1
     if i > cmdArgs.len() + 1 {
-      if sourceFile == "" { eprintln("Usage: fusec2 <file.fuse> [-o output]")
+      if sourceFile == "" { eprintln("Usage: fusec2 <file.fuse> [-o output] [--lib path]")
   exit(1) }
       if outputFile == "" { outputFile = sourceFile.replace(".fuse", "") }
       val source = readFile(sourceFile)?
@@ -769,8 +772,10 @@ fn main() -> Result<(), String> {
       cgMain(mutref compiler, program)
       val objPath = f"{outputFile}.o"
       cl_module_finish(compiler.ctx, objPath, objPath.len())
-      // TODO: link step — for now, just produce the object file
-      eprintln(f"Compiled: {objPath}")
+      if libPath == "" { eprintln(f"Object written: {objPath} (no --lib given, skipping link)")
+  return Ok(()) }
+      val rc = cl_link(objPath, objPath.len(), outputFile, outputFile.len(), libPath, libPath.len())
+      if rc != 0 { return Err(f"link failed (exit {rc})") }
       return Ok(())
     }
   }

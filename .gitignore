@@ -5,6 +5,15 @@ stage1/target/
 stage0/src/__pycache__/
 *.pyc
 
+# Compiled binaries and debug symbols
+*.exe
+*.pdb
+*.o
+*.obj
+*.lib
+*.a
+fusec2*
+
 # IDE / editor
 .claude/
 .vscode/
