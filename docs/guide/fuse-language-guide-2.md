@@ -85,7 +85,7 @@ Fuse is divided into two tiers. **Fuse Core** is the minimal subset sufficient t
 - `ref`, `mutref`, `owned`, `move`
 - `Result<T,E>`, `Option<T>`, `match`, `when`, `?`
 - `if`/`else`, `for`/`in`, `while`, `loop`, `break`, `continue`, `return`
-- `List<T>`, `String`, `Int`, `Float`, `Bool`
+- `List<T>`, `Map<K, V>`, `String`, `Int`, `Float`, `Bool`
 - `f"..."` interpolation, `?.` chaining, `?:` Elvis
 - `defer`
 - Extension functions, expression-body functions, block expressions
@@ -123,6 +123,7 @@ Variables are declared with `val` (immutable) or `var` (mutable). The compiler i
 | Type | Description |
 |---|---|
 | `List<T>` | Dynamically-sized ordered collection of elements of type `T` |
+| `Map<K, V>` | Key-value collection with unique keys, unordered |
 | `Option<T>` | Either `Some(value)` or `None` — nullable types without null |
 | `Result<T, E>` | Either `Ok(value)` or `Err(error)` — fallible operations without exceptions |
 
@@ -142,6 +143,13 @@ count = count + 1
 // explicit type annotations (optional — compiler infers)
 val ratio: Float = 98.6
 var names: List<String> = []
+
+// Map<K, V> — key-value collection
+var scores = Map::<String, Int>.new()
+scores.set("alice", 95)
+scores.set("bob", 87)
+val s = scores.get("alice")       // Option<Int> → Some(95)
+val missing = scores.get("eve")   // Option<Int> → None
 ```
 
 ### Rules
@@ -154,6 +162,44 @@ var names: List<String> = []
 - `Bool` is `true` or `false`. There is no implicit conversion from integers to booleans.
 - `String` is UTF-8 text. String literals use double quotes: `"hello"`.
 - `List<T>` is a dynamically-sized ordered collection. List literals use square brackets: `[1, 2, 3]`.
+- `Map<K, V>` is an unordered key-value collection with unique keys. Created with `Map::<K, V>.new()`. Keys must support equality (`==`). `.get(key)` returns `Option<V>`, not a raw value — no null, no panic on missing key.
+
+### Map methods
+
+| Method | Signature | Description |
+|---|---|---|
+| `Map::<K, V>.new()` | `() -> Map<K, V>` | Create empty map |
+| `.set(key, value)` | `(K, V) -> ()` | Insert or update entry |
+| `.get(key)` | `(K) -> Option<V>` | Lookup — returns `Some(v)` or `None` |
+| `.contains(key)` | `(K) -> Bool` | Check if key exists |
+| `.remove(key)` | `(K) -> Option<V>` | Remove and return value |
+| `.len()` | `() -> Int` | Number of entries |
+| `.isEmpty()` | `() -> Bool` | True if no entries |
+| `.keys()` | `() -> List<K>` | All keys (unordered) |
+| `.values()` | `() -> List<V>` | All values (unordered) |
+| `.entries()` | `() -> List<(K, V)>` | All key-value pairs |
+
+```fuse
+// Map example — symbol table for a compiler
+var symbols = Map::<String, Int>.new()
+symbols.set("x", 42)
+symbols.set("y", 7)
+
+match symbols.get("x") {
+  Some(val) => println(f"x = {val}")
+  None      => println("x not found")
+}
+
+println(f"has y: {symbols.contains("y")}")   // true
+println(f"count: {symbols.len()}")           // 2
+
+for key in symbols.keys() {
+  println(f"  {key}")
+}
+
+symbols.remove("x")
+println(f"after remove: {symbols.len()}")    // 1
+```
 
 ---
 
@@ -1431,6 +1477,7 @@ CRITICAL: The writeback (step 5) must happen for EVERY return path, including ea
 | List ops | `fuse_rt_list_push(list, val)`, `fuse_rt_list_get(list, i)` |
 | Result/Option | `fuse_rt_ok(v)`, `fuse_rt_err(v)`, `fuse_rt_some(v)`, `fuse_rt_none()` |
 | Struct ops | `fuse_rt_struct_new(name, len)`, `fuse_rt_field(obj, name, len)` |
+| Map ops | `fuse_rt_map_new()`, `fuse_rt_map_set(map, k, v)`, `fuse_rt_map_get(map, k)` |
 | I/O | `fuse_rt_println(v)`, `fuse_rt_read_file(path, len)` |
 | Ref cells | `fuse_rt_ref_new(v)`, `fuse_rt_ref_get(cell)`, `fuse_rt_ref_set(cell, v)` |
 

@@ -309,6 +309,10 @@ class FuseStruct:
     type_name: str
     fields: dict[str, Any]
     on_del: Callable | None   # __del__ hook for ASAP simulation
+
+@dataclass
+class FuseMap:
+    entries: dict[Any, Any]   # Map<K, V> backed by Python dict
 ```
 
 **`stage0/src/environment.py`** — Scope chain and binding management.
@@ -326,6 +330,7 @@ Tracks which bindings are live, which have been moved, and which are `val` vs `v
 - `f"..."` string interpolation
 - `?.` and `?:` short-circuit evaluation
 - `while` loops with `break` and `continue`
+- `Map<K, V>` — creation, `.set()`, `.get()` returning `Option<V>`, `.remove()`, iteration
 - Module resolution and `import`
 
 **`stage0/src/main.py`** — CLI entry point:

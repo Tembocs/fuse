@@ -116,6 +116,7 @@ fuse/
 │   │   ├── result.fuse                # Result<T,E>, Ok, Err
 │   │   ├── option.fuse                # Option<T>, Some, None
 │   │   ├── list.fuse                  # List<T> — map, filter, sorted, retainWhere, etc.
+│   │   ├── map.fuse                   # Map<K, V> — set, get, remove, keys, values, entries
 │   │   ├── string.fuse                # String — interpolation, slicing, parsing
 │   │   ├── int.fuse                   # Int — arithmetic, conversions
 │   │   ├── float.fuse                 # Float — arithmetic, SIMD-ready layout
