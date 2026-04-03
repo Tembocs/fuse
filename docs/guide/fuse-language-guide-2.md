@@ -940,6 +940,10 @@ fn main() {
 - If two imports bring in the same name, the compiler reports an ambiguity error. Resolve by using qualified access (`module.Name`) instead of destructured imports.
 - Nested directories map directly to nested module paths: `src/a/b/c.fuse` is `a.b.c`.
 
+### Future: Package Management
+
+A package manager is a post-self-hosting concern. The module system (`import`/`pub`) is the foundation it will be built on. The package manager will not be designed until Stage 2 is complete and developers are writing real Fuse libraries — its design depends on decisions about versioning, registry hosting, native dependencies, and cross-compilation that cannot be answered responsibly until the language is stable and in use. Cargo, Go modules, and npm are living proof that a package manager designed too early creates permanent ecosystem debt, while one designed after language maturity becomes an asset.
+
 ---
 
 ## 1.13 Extension Functions
