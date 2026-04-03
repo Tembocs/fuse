@@ -70,7 +70,7 @@ Every feature in Fuse has been proven in production at scale. Fuse does not expe
 | **C#** | `async`/`await`, LINQ-style method chains (`.map`, `.filter`, `.sorted`) |
 | **Python** | `f"..."` string interpolation, list comprehensions, `@decorator` syntax |
 | **Go** | `spawn` (goroutines), `defer`, typed channels (`Chan<T>`) |
-| **TypeScript** | Union types (`A | B | C`), optional chaining `?.`, `interface` constraints |
+| **TypeScript** | Union types (`A \| B \| C`), optional chaining `?.`, `interface` constraints |
 
 ---
 
